@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"testing"
@@ -475,4 +476,41 @@ func TestIntegration_ConnectionStates(t *testing.T) {
 
 	_, err = testClient.Ping(ctx, &emptypb.Empty{})
 	assert.Error(t, err, "Expected error when using closed connection")
+}
+
+// TestIntegration_RetryHonoursMaxRetries проверяет, что число попыток берётся из конфига
+// (MaxRetries повторов + первая попытка), а логирование не теряется при включённых ретраях.
+func TestIntegration_RetryHonoursMaxRetries(t *testing.T) {
+	var logs bytes.Buffer
+
+	logger := zerolog.New(&logs)
+
+	server, err := NewTestServer(false, "", "", &logger)
+	require.NoError(t, err)
+	defer server.Stop()
+
+	require.NoError(t, server.Start())
+	server.Service().SetShouldFail(true)
+
+	cfg := &client.Config{
+		Endpoints:     server.Addr(),
+		Timeout:       5 * time.Second,
+		EnableLogging: true,
+		EnableRetries: true,
+		Retry: &client.RetryConfig{
+			MaxRetries:  2,
+			BackoffTime: 10 * time.Millisecond,
+		},
+	}
+
+	conn, err := client.NewClient(cfg, &logger)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = gen.NewTestClient(conn).Ping(context.Background(), &emptypb.Empty{})
+	require.Equal(t, codes.Internal, status.Code(err))
+
+	assert.Equal(t, int64(3), server.Service().Calls(), "ожидается 1 попытка + 2 повтора")
+	assert.Contains(t, logs.String(), "finished call", "логирующий интерсептор должен работать вместе с ретраями")
+	assert.Contains(t, logs.String(), "gRPC retry attempt")
 }

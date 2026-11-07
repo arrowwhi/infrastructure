@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"net/http"
+
+	"go.opentelemetry.io/otel/metric"
 )
 
 var _ HTTPClient = (*client)(nil)
@@ -24,6 +26,8 @@ type client struct {
 	headers       http.Header
 	serializers   map[string]SerializerFunc
 	deserializers map[string]DeserializerFunc
+
+	retryCounter metric.Int64Counter
 
 	config Config
 }
@@ -78,12 +82,18 @@ func NewClient(cfg Config, opts ...Option) (HTTPClient, error) {
 	}
 
 	httpClient := &http.Client{
-		Transport: transport,
+		Transport: instrumentTransport(cfg, transport),
+	}
+
+	retryCounter, err := newRetryCounter(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	cli := &client{
 		client:        httpClient,
 		config:        cfg,
+		retryCounter:  retryCounter,
 		headers:       make(http.Header),
 		log:           DefaultLogger(),
 		serializers:   make(map[string]SerializerFunc),

@@ -19,8 +19,8 @@ OpenTelemetry трассировка для Go приложений.
 import "github.com/arrowwhi/infrastructure/observability/tracing"
 
 cfg := tracing.Config{
-    Enabled:      true,
-    Exporter:     "stdout", // или "otlp-grpc"
+    Enabled:      true,        // по умолчанию false
+    Exporter:     "otlp-grpc", // или "otlp-http", "stdout" (только для отладки)
     SamplingRate: 1.0,
 }
 
@@ -117,6 +117,10 @@ cfg := tracing.Config{
 ```
 
 ## Sampling
+
+Используется `ParentBased(TraceIDRatioBased(SamplingRate))`: если у входящего запроса
+есть родительский спан, его решение о сэмплировании сохраняется, а `SamplingRate`
+применяется только к корневым спанам. Так трейс не рвётся между сервисами.
 
 Sampling позволяет трассировать только часть запросов для снижения нагрузки:
 

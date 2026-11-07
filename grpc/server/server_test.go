@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+
+	"github.com/arrowwhi/infrastructure/observability/health"
 )
 
 func startServer(t *testing.T, cfg Config, opts ...Option) (*Server, string, context.CancelFunc, <-chan error) {
@@ -116,4 +120,36 @@ func TestServer_Gateway(t *testing.T) {
 func TestNew_RequiresServiceName(t *testing.T) {
 	_, err := New(DefaultConfig(), "")
 	require.Error(t, err)
+}
+
+func TestServer_HealthRegistryDrivesServingStatus(t *testing.T) {
+	var healthy atomic.Bool
+
+	healthy.Store(true)
+
+	registry := health.New()
+	registry.Register("db", func(context.Context) error {
+		if healthy.Load() {
+			return nil
+		}
+
+		return errors.New("db down")
+	})
+
+	_, addr, cancel, done := startServer(t, DefaultConfig(), WithHealthRegistry(registry, 20*time.Millisecond))
+	defer func() { cancel(); <-done }()
+
+	client := healthpb.NewHealthClient(dial(t, addr))
+	waitServing(t, client)
+
+	healthy.Store(false)
+
+	require.Eventually(t, func() bool {
+		resp, err := client.Check(context.Background(), &healthpb.HealthCheckRequest{})
+
+		return err == nil && resp.GetStatus() == healthpb.HealthCheckResponse_NOT_SERVING
+	}, 3*time.Second, 20*time.Millisecond)
+
+	healthy.Store(true)
+	waitServing(t, client)
 }

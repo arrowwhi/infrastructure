@@ -63,55 +63,43 @@ func SetContextKeys(keys ...string) {
 }
 
 // Package-level logging functions
+//
+// Все функции добавляют в событие trace_id и span_id активного спана из ctx (если он есть)
+// и поля, которые извлекает ContextExtractor.
 
-func Info(ctx context.Context) *zerolog.Event {
-	l := getGlobal()
-	evt := l.logger.Info()
-	if ctx != nil && contextExtractor != nil {
+// enrich дополняет событие полями из контекста.
+func enrich(evt *zerolog.Event, ctx context.Context) *zerolog.Event {
+	if ctx == nil {
+		return evt
+	}
+
+	evt = withTrace(evt, ctx)
+
+	if contextExtractor != nil {
 		evt = contextExtractor(evt, ctx)
 	}
 
 	return evt
+}
+
+func Info(ctx context.Context) *zerolog.Event {
+	return enrich(getGlobal().logger.Info(), ctx)
 }
 
 func Warn(ctx context.Context) *zerolog.Event {
-	l := getGlobal()
-	evt := l.logger.Warn()
-	if ctx != nil && contextExtractor != nil {
-		evt = contextExtractor(evt, ctx)
-	}
-
-	return evt
+	return enrich(getGlobal().logger.Warn(), ctx)
 }
 
 func Debug(ctx context.Context) *zerolog.Event {
-	l := getGlobal()
-	evt := l.logger.Debug()
-	if ctx != nil && contextExtractor != nil {
-		evt = contextExtractor(evt, ctx)
-	}
-
-	return evt
+	return enrich(getGlobal().logger.Debug(), ctx)
 }
 
 func Error(ctx context.Context) *zerolog.Event {
-	l := getGlobal()
-	evt := l.logger.Error()
-	if ctx != nil && contextExtractor != nil {
-		evt = contextExtractor(evt, ctx)
-	}
-
-	return evt
+	return enrich(getGlobal().logger.Error(), ctx)
 }
 
 func Fatal(ctx context.Context) *zerolog.Event {
-	l := getGlobal()
-	evt := l.logger.Fatal()
-	if ctx != nil && contextExtractor != nil {
-		evt = contextExtractor(evt, ctx)
-	}
-
-	return evt
+	return enrich(getGlobal().logger.Fatal(), ctx)
 }
 
 func With() zerolog.Context {

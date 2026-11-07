@@ -220,7 +220,7 @@
               }
             ]
           },
-          "unit": "ms"
+          "unit": "s"
         },
         "overrides": [
           {
@@ -296,7 +296,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(otel_http_server_request_duration_bucket[1m])) by (le, http_route))",
+          "expr": "histogram_quantile(0.50, sum(rate(otel_http_server_request_duration_seconds_bucket[1m])) by (le, http_route))",
           "legendFormat": "p50 - {{http_route}}",
           "range": true,
           "refId": "A"
@@ -307,7 +307,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(otel_http_server_request_duration_bucket[1m])) by (le, http_route))",
+          "expr": "histogram_quantile(0.95, sum(rate(otel_http_server_request_duration_seconds_bucket[1m])) by (le, http_route))",
           "hide": false,
           "legendFormat": "p95 - {{http_route}}",
           "range": true,
@@ -319,7 +319,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(otel_http_server_request_duration_bucket[1m])) by (le, http_route))",
+          "expr": "histogram_quantile(0.99, sum(rate(otel_http_server_request_duration_seconds_bucket[1m])) by (le, http_route))",
           "hide": false,
           "legendFormat": "p99 - {{http_route}}",
           "range": true,

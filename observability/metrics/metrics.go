@@ -9,6 +9,7 @@ import (
 
 	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -67,6 +68,18 @@ func InitMeterProvider(ctx context.Context, cfg Config, serviceName, serviceVers
 
 	// Устанавливаем глобальный MeterProvider
 	otel.SetMeterProvider(mp)
+
+	if err = registerBuildInfo(mp, serviceName, serviceVersion, environment); err != nil {
+		return nil, err
+	}
+
+	// Для Prometheus-экспортера метрики рантайма уже есть: DefaultRegisterer содержит
+	// стандартные Go- и process-коллекторы (go_*, process_*). Для OTLP их нужно снимать явно.
+	if cfg.RuntimeMetrics && cfg.Exporter != "prometheus" {
+		if err = runtime.Start(runtime.WithMeterProvider(mp)); err != nil {
+			return nil, fmt.Errorf("failed to start runtime metrics: %w", err)
+		}
+	}
 
 	return mp, nil
 }

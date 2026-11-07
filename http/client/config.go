@@ -15,6 +15,15 @@ type Config struct {
 	TLS *TLSConfig `yaml:"tls" env-default:"{}"`
 
 	Retry *RetryConfig `yaml:"retry" env-default:"{}"`
+
+	// ServiceName — имя для meter'а и tracer'а; если пусто, используется "http-client".
+	ServiceName string `yaml:"service_name" env:"HTTP_CLIENT_SERVICE_NAME"`
+
+	// TracingEnabled — спан на каждую попытку запроса и проброс trace context (traceparent)
+	// в заголовки. TracerProvider должен быть инициализирован.
+	TracingEnabled bool `yaml:"tracing_enabled" env:"HTTP_CLIENT_TRACING_ENABLED" env-default:"true"`
+	// MetricsEnabled — метрики http.client.* (длительность, размеры, число ретраев).
+	MetricsEnabled bool `yaml:"metrics_enabled" env:"HTTP_CLIENT_METRICS_ENABLED" env-default:"true"`
 }
 
 type TLSConfig struct {

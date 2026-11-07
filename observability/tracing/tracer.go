@@ -1,4 +1,4 @@
-// Package tracing provides OpenTelemetry tracing integration with support for stdout and OTLP gRPC exporters.
+// Package tracing provides OpenTelemetry tracing integration with OTLP gRPC, OTLP HTTP and stdout exporters.
 package tracing
 
 import (
@@ -7,6 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -73,6 +74,20 @@ func InitTracer(ctx context.Context, cfg Config, serviceName, serviceVersion, en
 			return nil, fmt.Errorf("failed to create OTLP gRPC exporter: %w", err)
 		}
 
+	case "otlp-http":
+		opts := []otlptracehttp.Option{
+			otlptracehttp.WithEndpoint(cfg.OTLPEndpoint),
+		}
+
+		if cfg.OTLPInsecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+
+		exporter, err = otlptracehttp.New(ctx, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create OTLP HTTP exporter: %w", err)
+		}
+
 	default:
 		return nil, fmt.Errorf("unknown exporter type: %s", cfg.Exporter)
 	}
@@ -81,7 +96,9 @@ func InitTracer(ctx context.Context, cfg Config, serviceName, serviceVersion, en
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SamplingRate)),
+		// ParentBased: если вызывающий сервис уже принял решение о сэмплировании, следуем ему,
+		// иначе трейс рвётся на границе сервисов. Ratio применяется только к корневым спанам.
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SamplingRate))),
 	)
 
 	// Регистрируем глобально

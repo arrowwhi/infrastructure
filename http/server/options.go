@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
+
+	"github.com/arrowwhi/infrastructure/observability/health"
 )
 
 // Option функция для конфигурации сервера
@@ -28,5 +30,12 @@ func WithMiddlewares(mws ...func(http.Handler) http.Handler) Option {
 func WithShutdownHook(fn func(context.Context) error) Option {
 	return func(s *Server) {
 		s.shutdown = append(s.shutdown, fn)
+	}
+}
+
+// WithHealthRegistry подставляет общий реестр проверок для /ready (по умолчанию создаётся свой).
+func WithHealthRegistry(registry *health.Registry) Option {
+	return func(s *Server) {
+		s.health = registry
 	}
 }

@@ -17,6 +17,9 @@ type Config struct {
 	Enabled        bool  `yaml:"enabled" env:"ENABLED" env-default:"true"`
 	// OTLPInsecure - использовать ли небезопасное соединение для OTLP
 	OTLPInsecure bool `yaml:"otlp_insecure" env:"OTLP_INSECURE" env-default:"true"`
+	// RuntimeMetrics - метрики рантайма Go (память, GC, горутины) для OTLP-экспортеров.
+	// Для Prometheus они уже есть в стандартном реестре (go_*, process_*).
+	RuntimeMetrics bool `yaml:"runtime_metrics" env:"RUNTIME_METRICS" env-default:"true"`
 }
 
 // DefaultConfig возвращает конфигурацию по умолчанию
@@ -28,5 +31,6 @@ func DefaultConfig() Config {
 		OTLPEndpoint:       "localhost:4317",
 		OTLPInsecure:       true,
 		MetricInterval:     defaultMetricIntervalSeconds,
+		RuntimeMetrics:     true,
 	}
 }

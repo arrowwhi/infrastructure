@@ -15,14 +15,36 @@ Chi-based HTTP сервер с поддержкой:
 ### Observability
 
 #### Logger (`observability/logger`)
-Zerolog-based логгер с маскировкой чувствительных данных.
+Zerolog-based логгер с маскировкой чувствительных данных. В каждую запись с контекстом
+автоматически попадают `trace_id` и `span_id` активного спана; для «сырых» zerolog-логгеров
+есть `logger.TraceHook`.
+
+#### Metrics (`observability/metrics`)
+OpenTelemetry метрики (Prometheus / OTLP): HTTP middleware (метка — шаблон маршрута),
+gRPC-интерсепторы для сервера и клиента, метрики рантайма Go, `app_build_info`.
+Все длительности — в секундах.
 
 #### Tracing (`observability/tracing`)
 OpenTelemetry трассировка с поддержкой:
-- OTLP gRPC экспорт (Jaeger, Tempo и т.д.)
-- Stdout экспорт для разработки
+- OTLP gRPC и OTLP HTTP экспорт (Jaeger, Tempo и т.д.), stdout — для отладки
+- `ParentBased` sampling: решение вызывающего сервиса сохраняется
 - Автоматическая трассировка HTTP запросов
-- Настраиваемый sampling
+- По умолчанию выключена (`OTEL_ENABLED=false`)
+
+#### Health (`observability/health`)
+Реестр проверок зависимостей с таймаутом на проверку и некритичными проверками.
+Один реестр отдаёт `/ready` в `http/server`, переключает `grpc.health.v1` в
+`grpc/server` (`WithHealthRegistry`) и публикует метрики `health.check.status`/`duration`.
+
+```go
+reg := health.New()
+reg.Register("postgres", pool.Healthcheck)
+reg.Register("redis", rdb.Healthcheck, health.NonCritical())
+_ = reg.RegisterMetrics(otel.Meter(serviceName))
+
+httpSrv, _ := httpserver.New(cfg.HTTP, httpserver.WithHealthRegistry(reg))
+grpcSrv, _ := grpcserver.New(cfg.GRPC, serviceName, grpcserver.WithHealthRegistry(reg, 10*time.Second))
+```
 
 ### Database
 
@@ -39,7 +61,8 @@ OpenTelemetry трассировка с поддержкой:
 - advisory locks, LISTEN/NOTIFY, разделение чтения и записи, readiness-проба
 - миграции — опциональный подпакет `connections/postgres/migrate`
 
-- Redis (`connections/redis`) — не реализовано
+- Redis (`connections/redis`) — go-redis v9 с redisotel (спаны и метрики команд и пула),
+  проверкой соединения при старте и `Healthcheck` для `observability/health`
 - Transaction Manager (`utils/txmanager`) — координация транзакции PostgreSQL
   и конвейера Redis; для транзакций только по PostgreSQL используйте `postgres.Pool.InTx`
 

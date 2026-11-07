@@ -17,17 +17,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/arrowwhi/infrastructure/observability/health"
 	"github.com/arrowwhi/infrastructure/observability/logger"
 )
 
 type Server struct {
-	router          chi.Router
-	strategy        serverStrategy
-	defaultHandlers *healthHandler
-	shutdown        []func(context.Context) error
-	config          Config
-	mu              sync.Mutex
-	metricsServer   *metricsServer
+	router        chi.Router
+	strategy      serverStrategy
+	health        *health.Registry
+	shutdown      []func(context.Context) error
+	config        Config
+	mu            sync.Mutex
+	metricsServer *metricsServer
 }
 
 func New(config Config, opts ...Option) (*Server, error) {
@@ -198,21 +199,6 @@ func (s *Server) shutdownHTTPServer(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (s *Server) registerHealthHandlers() {
-	s.defaultHandlers = &healthHandler{
-		checkers: []HealthChecker{},
-	}
-
-	s.router.Get("/healthz", s.defaultHandlers.healthz)
-	s.router.Get("/ready", s.defaultHandlers.readiness)
-}
-
-func (s *Server) AddHealthCheck(checker HealthChecker) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.defaultHandlers.checkers = append(s.defaultHandlers.checkers, checker)
 }
 
 // Handler возвращает http.Handler для тестирования сервера

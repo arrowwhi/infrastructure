@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/recovery"
@@ -20,14 +21,17 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/health"
+	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
+	"github.com/arrowwhi/infrastructure/observability/health"
 	"github.com/arrowwhi/infrastructure/observability/logger"
 	"github.com/arrowwhi/infrastructure/observability/metrics"
 )
+
+const defaultHealthInterval = 10 * time.Second
 
 // Service — реализация gRPC-сервиса, которую можно зарегистрировать на сервере.
 // Обычно это обёртка над сгенерированным pb.RegisterXxxServer.
@@ -44,13 +48,16 @@ type GatewayService interface {
 // Server — gRPC-сервер с инфраструктурной обвязкой.
 type Server struct {
 	grpcServer    *grpc.Server
-	health        *health.Server
+	health        *grpchealth.Server
 	gatewayServer *http.Server
 	gatewayConn   *grpc.ClientConn
 	listener      net.Listener
 
 	serviceName string
 	services    []Service
+
+	healthRegistry *health.Registry
+	healthInterval time.Duration
 
 	unary         []grpc.UnaryServerInterceptor
 	stream        []grpc.StreamServerInterceptor
@@ -84,7 +91,7 @@ func New(cfg Config, serviceName string, opts ...Option) (*Server, error) {
 	}
 
 	if cfg.HealthEnabled {
-		s.health = health.NewServer()
+		s.health = grpchealth.NewServer()
 		healthpb.RegisterHealthServer(s.grpcServer, s.health)
 	}
 
@@ -108,7 +115,7 @@ func (s *Server) GRPC() *grpc.Server {
 
 // Health возвращает health-сервер (nil, если HealthEnabled=false). Через него можно
 // переводить отдельные сервисы в NOT_SERVING, например при потере зависимости.
-func (s *Server) Health() *health.Server {
+func (s *Server) Health() *grpchealth.Server {
 	return s.health
 }
 
@@ -153,6 +160,14 @@ func (s *Server) Run(ctx context.Context) error {
 			if err := s.gatewayServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("gateway serve: %w", err)
 			}
+
+			return nil
+		})
+	}
+
+	if s.health != nil && s.healthRegistry != nil {
+		g.Go(func() error {
+			s.watchHealth(gCtx)
 
 			return nil
 		})
@@ -227,15 +242,42 @@ func (s *Server) shutdown(ctx context.Context) error {
 
 // markServing выставляет SERVING для сервера целиком и для каждого зарегистрированного сервиса.
 func (s *Server) markServing() {
+	s.setServingStatus(healthpb.HealthCheckResponse_SERVING)
+}
+
+func (s *Server) setServingStatus(st healthpb.HealthCheckResponse_ServingStatus) {
 	if s.health == nil {
 		return
 	}
 
-	s.health.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	s.health.SetServingStatus("", st)
 
 	for name := range s.grpcServer.GetServiceInfo() {
-		s.health.SetServingStatus(name, healthpb.HealthCheckResponse_SERVING)
+		s.health.SetServingStatus(name, st)
 	}
+}
+
+// watchHealth переводит gRPC health в SERVING/NOT_SERVING по результатам реестра проверок.
+func (s *Server) watchHealth(ctx context.Context) {
+	interval := s.healthInterval
+	if interval <= 0 {
+		interval = defaultHealthInterval
+	}
+
+	s.healthRegistry.Watch(ctx, interval, func(report health.Report) {
+		if ctx.Err() != nil {
+			return
+		}
+
+		if report.Ready() {
+			s.setServingStatus(healthpb.HealthCheckResponse_SERVING)
+
+			return
+		}
+
+		logger.Warn(ctx).Interface("checks", report.Checks).Msg("Health checks failed, gRPC server is NOT_SERVING")
+		s.setServingStatus(healthpb.HealthCheckResponse_NOT_SERVING)
+	})
 }
 
 func (s *Server) buildServerOptions() []grpc.ServerOption {
@@ -315,10 +357,9 @@ func (s *Server) setupGateway(ctx context.Context) error {
 		handler = s.gwMiddlewares[i](handler)
 	}
 
-	if s.cfg.MetricsEnabled {
-		handler = metrics.Middleware(s.serviceName)(handler)
-	}
-
+	// HTTP-метрики на шлюзе не пишем: каждый запрос шлюза — это gRPC-вызов, который
+	// уже учтён серверным интерсептором с меткой метода. Трейс же нужен, чтобы
+	// связать HTTP-запрос с gRPC-спаном.
 	if s.cfg.TracingEnabled {
 		handler = otelhttp.NewHandler(handler, s.serviceName+".gateway")
 	}

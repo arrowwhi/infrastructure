@@ -69,6 +69,18 @@ func (r *Request) Execute(target interface{}) (resp *http.Response, lastErr erro
 				"url", fullURL,
 				"backoff", backoff,
 			)
+			r.client.recordRetry(r.ctx, req.Method)
+
+			// Тело первой попытки уже прочитано транспортом: без перемотки повтор
+			// уйдёт с пустым телом при выставленном Content-Length.
+			if req.GetBody != nil {
+				body, bodyErr := req.GetBody()
+				if bodyErr != nil {
+					return nil, fmt.Errorf("req.GetBody: %w", bodyErr)
+				}
+
+				req.Body = body
+			}
 		}
 
 		resp, lastErr = r.client.client.Do(req)

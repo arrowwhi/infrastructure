@@ -6,27 +6,35 @@
 
 - Поддержка нескольких экспортеров: Prometheus, OTLP gRPC, OTLP HTTP
 - HTTP middleware для автоматического сбора метрик запросов
-- gRPC interceptors для автоматического сбора метрик gRPC запросов
+- gRPC interceptors для сервера и клиента (unary и stream)
+- Метрики рантайма Go для OTLP-экспортеров (`RuntimeMetrics`, по умолчанию включены;
+  для Prometheus их отдают стандартные коллекторы `go_*`/`process_*`)
+- `app.build.info` (в Prometheus — `app_build_info`): константа 1 с метками
+  `service`, `version`, `environment`, `go_version`, `revision`
+- Все длительности — в секундах (float), гистограммы с границами `DurationBuckets`
 - Гибкая конфигурация
 - Интеграция с OpenTelemetry
 
 ## Собираемые HTTP метрики
 
 - `http.server.request.count` - общее количество HTTP запросов
-- `http.server.request.duration` - длительность обработки запросов (ms)
+- `http.server.request.duration` - длительность обработки запросов (s)
 - `http.server.request.size` - размер запросов (bytes)
 - `http.server.response.size` - размер ответов (bytes)
 - `http.server.active_requests` - количество активных запросов
 
 Все метрики включают атрибуты:
 - `http.method` - HTTP метод
-- `http.route` - путь запроса
+- `http.route` - шаблон маршрута chi (`/users/{id}`), а не сырой путь; для запросов,
+  не попавших в маршрут, — `unmatched`. Поэтому middleware нужно подключать через
+  `router.Use`, а не оборачивать им роутер снаружи. `http.server.active_requests`
+  размечен только методом: маршрут до обработки ещё неизвестен
 - `http.status_code` - код ответа
 
 ## Собираемые gRPC метрики
 
 - `grpc.server.request.count` - общее количество gRPC запросов
-- `grpc.server.request.duration` - длительность обработки запросов (ms)
+- `grpc.server.request.duration` - длительность обработки запросов (s)
 - `grpc.server.request.size` - размер запросов (bytes)
 - `grpc.server.response.size` - размер ответов (bytes)
 - `grpc.server.active_requests` - количество активных запросов
@@ -35,8 +43,9 @@
 Все метрики включают атрибуты:
 - `grpc.method` - полное имя метода
 - `grpc.status` - статус код ответа
-- `grpc.is_client_stream` - является ли клиентским стримом (для streaming)
-- `grpc.is_server_stream` - является ли серверным стримом (для streaming)
+
+Клиентские метрики (`UnaryClientInterceptor`/`StreamClientInterceptor`, их подключает
+`grpc/client`) — те же имена с префиксом `grpc.client.*`, плюс `grpc.client.retry.count`.
 
 ## Использование
 

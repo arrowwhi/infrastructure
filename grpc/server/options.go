@@ -3,9 +3,12 @@ package server
 import (
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
+
+	"github.com/arrowwhi/infrastructure/observability/health"
 )
 
 // Option настраивает Server.
@@ -60,5 +63,16 @@ func WithGatewayMiddlewares(mws ...func(http.Handler) http.Handler) Option {
 func WithListener(lis net.Listener) Option {
 	return func(s *Server) {
 		s.listener = lis
+	}
+}
+
+// WithHealthRegistry связывает grpc.health.v1 с общим реестром проверок: реестр
+// опрашивается каждые interval, и при падении критичной проверки весь сервер
+// (пустое имя сервиса и каждый зарегистрированный сервис) переходит в NOT_SERVING.
+// Требует HealthEnabled=true. interval <= 0 — 10 секунд.
+func WithHealthRegistry(registry *health.Registry, interval time.Duration) Option {
+	return func(s *Server) {
+		s.healthRegistry = registry
+		s.healthInterval = interval
 	}
 }

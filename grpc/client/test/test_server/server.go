@@ -4,6 +4,7 @@ package test
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -22,6 +23,7 @@ type TestService struct {
 	logger     *zerolog.Logger
 	delay      time.Duration
 	shouldFail bool
+	calls      atomic.Int64
 }
 
 // NewTestService создает новый тестовый сервис
@@ -32,6 +34,8 @@ func NewTestService(logger *zerolog.Logger) *TestService {
 }
 
 func (s *TestService) Ping(ctx context.Context, req *emptypb.Empty) (*gen.PingResponse, error) {
+	s.calls.Add(1)
+
 	if s.delay > 0 {
 		time.Sleep(s.delay)
 	}
@@ -50,6 +54,11 @@ func (s *TestService) SlowPing(ctx context.Context, req *emptypb.Empty) (*gen.Pi
 
 func (s *TestService) FailingPing(ctx context.Context, req *emptypb.Empty) (*gen.PingResponse, error) {
 	return nil, status.Error(codes.Internal, "always fails")
+}
+
+// Calls возвращает число вызовов Ping (нужно тестам ретраев).
+func (s *TestService) Calls() int64 {
+	return s.calls.Load()
 }
 
 func (s *TestService) SetShouldFail(fail bool) {
