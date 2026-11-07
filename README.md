@@ -46,6 +46,16 @@ httpSrv, _ := httpserver.New(cfg.HTTP, httpserver.WithHealthRegistry(reg))
 grpcSrv, _ := grpcserver.New(cfg.GRPC, serviceName, grpcserver.WithHealthRegistry(reg, 10*time.Second))
 ```
 
+### Telegram (`telegram/...`)
+
+Скелет Telegram-бота — см. [`telegram/README.md`](telegram/README.md):
+- `telegram/app` — запуск сервиса: конфиг из env, логи, метрики, трейсинг, `/healthz` `/ready` `/metrics`, graceful shutdown;
+- `telegram/api` — рукописный клиент Bot API с лимитами Telegram и повтором после 429;
+- `telegram/bot` — команды, кнопки, шаги диалога, polling/webhook, порядок обработки внутри чата;
+- `telegram/state` — хранилище шагов диалога: память, PostgreSQL, Redis.
+
+Пример: [`examples/tgbot`](examples/tgbot/main.go).
+
 ### Database
 
 #### PostgreSQL (`connections/postgres`)
