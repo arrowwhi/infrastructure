@@ -1,205 +1,123 @@
-# Metrics Package
+# observability/metrics
 
-Пакет для сбора и экспорта метрик приложения с использованием OpenTelemetry.
+Инициализация OpenTelemetry-метрик (Prometheus, OTLP gRPC, OTLP HTTP) и готовые
+инструменты: HTTP-middleware, gRPC-интерсепторы для сервера и клиента, метрики рантайма Go
+и `app_build_info`. `InitMeterProvider` регистрирует провайдер глобально
+(`otel.SetMeterProvider`), поэтому все коннекторы библиотеки подхватывают его сами.
+Все длительности — в секундах, гистограммы с границами `metrics.DurationBuckets`
+(1 мс … 10 с).
 
-## Возможности
+## Подключение
 
-- Поддержка нескольких экспортеров: Prometheus, OTLP gRPC, OTLP HTTP
-- HTTP middleware для автоматического сбора метрик запросов
-- gRPC interceptors для сервера и клиента (unary и stream)
-- Метрики рантайма Go для OTLP-экспортеров (`RuntimeMetrics`, по умолчанию включены;
-  для Prometheus их отдают стандартные коллекторы `go_*`/`process_*`)
-- `app.build.info` (в Prometheus — `app_build_info`): константа 1 с метками
-  `service`, `version`, `environment`, `go_version`, `revision`
-- Все длительности — в секундах (float), гистограммы с границами `DurationBuckets`
-- Гибкая конфигурация
-- Интеграция с OpenTelemetry
-
-## Собираемые HTTP метрики
-
-- `http.server.request.count` - общее количество HTTP запросов
-- `http.server.request.duration` - длительность обработки запросов (s)
-- `http.server.request.size` - размер запросов (bytes)
-- `http.server.response.size` - размер ответов (bytes)
-- `http.server.active_requests` - количество активных запросов
-
-Все метрики включают атрибуты:
-- `http.method` - HTTP метод
-- `http.route` - шаблон маршрута chi (`/users/{id}`), а не сырой путь; для запросов,
-  не попавших в маршрут, — `unmatched`. Поэтому middleware нужно подключать через
-  `router.Use`, а не оборачивать им роутер снаружи. `http.server.active_requests`
-  размечен только методом: маршрут до обработки ещё неизвестен
-- `http.status_code` - код ответа
-
-## Собираемые gRPC метрики
-
-- `grpc.server.request.count` - общее количество gRPC запросов
-- `grpc.server.request.duration` - длительность обработки запросов (s)
-- `grpc.server.request.size` - размер запросов (bytes)
-- `grpc.server.response.size` - размер ответов (bytes)
-- `grpc.server.active_requests` - количество активных запросов
-- `grpc.server.stream.messages` - количество стрим-сообщений
-
-Все метрики включают атрибуты:
-- `grpc.method` - полное имя метода
-- `grpc.status` - статус код ответа
-
-Клиентские метрики (`UnaryClientInterceptor`/`StreamClientInterceptor`, их подключает
-`grpc/client`) — те же имена с префиксом `grpc.client.*`, плюс `grpc.client.retry.count`.
-
-## Использование
-
-### Базовая инициализация
+```bash
+go get github.com/arrowwhi/infrastructure@latest
+```
 
 ```go
 import "github.com/arrowwhi/infrastructure/observability/metrics"
-
-cfg := metrics.Config{
-    Enabled:  true,
-    Exporter: "prometheus",
-}
-
-mp, err := metrics.InitMeterProvider(context.Background(), cfg, "my-service", "1.0.0", "production")
-if err != nil {
-    log.Fatal(err)
-}
-defer mp.Shutdown(context.Background())
 ```
 
-### Использование с HTTP сервером
+## Пример
 
 ```go
+package main
+
 import (
-    httpserver "github.com/arrowwhi/infrastructure/http/server"
-    "github.com/arrowwhi/infrastructure/observability/metrics"
+	"context"
+	"log"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/arrowwhi/infrastructure/observability/metrics"
 )
 
-// Инициализация метрик
-mp, err := metrics.InitMeterProvider(ctx, cfg.Metrics, "my-service", "1.0.0", "production")
-if err != nil {
-    log.Fatal(err)
-}
-defer mp.Shutdown(context.Background())
+func main() {
+	ctx := context.Background()
 
-// Создание сервера с metrics middleware
-srv, err := httpserver.New(
-    cfg.Server,
-    httpserver.WithMiddlewares(
-        metrics.Middleware("my-service"),
-    ),
-)
+	mp, err := metrics.InitMeterProvider(ctx, metrics.DefaultConfig(), "my-service", "1.0.0", "production")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if mp != nil { // при Enabled=false провайдера нет
+		defer func() { _ = mp.Shutdown(context.Background()) }()
+	}
 
-// Регистрация /metrics эндпоинта для Prometheus (если используется Prometheus экспортер)
-if metricsHandler := metrics.Handler(); metricsHandler != nil {
-    srv.Router().Handle("GET /metrics", metricsHandler)
+	r := chi.NewRouter()
+	r.Use(metrics.Middleware("my-service")) // именно router.Use — нужен шаблон маршрута
+	r.Get("/users/{id}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	if h := metrics.Handler(); h != nil { // только для экспортёра prometheus
+		r.Handle("/metrics", h)
+	}
+
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
 ```
 
-**Важно:** При использовании Prometheus экспортера необходимо зарегистрировать HTTP handler на `/metrics`. 
-Функция `metrics.Handler()` возвращает готовый handler, который нужно добавить в роутер сервера.
-
-### Использование с gRPC сервером
+gRPC без `grpc/server`:
 
 ```go
-import (
-    "github.com/arrowwhi/infrastructure/observability/metrics"
-    "google.golang.org/grpc"
-)
-
-// Unary interceptor
-unaryInterceptor := metrics.UnaryServerInterceptor("my-service")
-
-// Stream interceptor
-streamInterceptor := metrics.StreamServerInterceptor("my-service")
-
-// Создание gRPC сервера с interceptors
 srv := grpc.NewServer(
-    grpc.ChainUnaryInterceptor(unaryInterceptor),
-    grpc.ChainStreamInterceptor(streamInterceptor),
+	grpc.ChainUnaryInterceptor(metrics.UnaryServerInterceptor("my-service")),
+	grpc.ChainStreamInterceptor(metrics.StreamServerInterceptor("my-service")),
 )
 ```
 
-### Создание кастомных метрик
-
-```go
-import (
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/metric"
-)
-
-meter := otel.Meter("my-service")
-
-// Counter
-counter, _ := meter.Int64Counter(
-    "custom.counter",
-    metric.WithDescription("Custom counter metric"),
-)
-counter.Add(ctx, 1)
-
-// Histogram
-histogram, _ := meter.Float64Histogram(
-    "custom.histogram",
-    metric.WithDescription("Custom histogram metric"),
-)
-histogram.Record(ctx, 42.0)
-
-// Gauge (UpDownCounter)
-gauge, _ := meter.Int64UpDownCounter(
-    "custom.gauge",
-    metric.WithDescription("Custom gauge metric"),
-)
-gauge.Add(ctx, 1)
-```
+Свои метрики — обычным OTel API: `otel.Meter("my-service").Int64Counter(...)`; для длительностей
+используйте единицу `"s"` и `metric.WithExplicitBucketBoundaries(metrics.DurationBuckets...)`.
 
 ## Конфигурация
 
-### Prometheus
+Префикс переменных задаёт тот, кто встраивает `Config`; в `telegram/app` это `METRICS_`.
 
-```go
-cfg := metrics.Config{
-    Enabled:  true,
-    Exporter: "prometheus",
-}
-```
+| Переменная (`telegram/app`) | По умолчанию | Смысл |
+|---|---|---|
+| `METRICS_ENABLED` | `true` | `false` — провайдер не создаётся, `InitMeterProvider` возвращает `nil, nil` |
+| `METRICS_EXPORTER` | `prometheus` | `prometheus`, `otlp-grpc`, `otlp-http` |
+| `METRICS_OTLP_ENDPOINT` | `localhost:4317` | адрес коллектора для OTLP (`:4318` для otlp-http) |
+| `METRICS_OTLP_INSECURE` | `true` | OTLP без TLS |
+| `METRICS_METRIC_INTERVAL` | `60` | период отправки OTLP, секунды |
+| `METRICS_RUNTIME_METRICS` | `true` | метрики рантайма Go для OTLP (для Prometheus их отдают стандартные `go_*`/`process_*`) |
+| `METRICS_PROMETHEUS_ENDPOINT` | `:9090` | не используется: `/metrics` монтируется в ваш сервер через `metrics.Handler()` |
 
-После инициализации MeterProvider необходимо зарегистрировать HTTP handler:
+## Метрики
 
-```go
-// В HTTP сервере
-if metricsHandler := metrics.Handler(); metricsHandler != nil {
-    srv.Router().Handle("GET /metrics", metricsHandler)
-}
-```
+HTTP (`Middleware`), метки `http.method`, `http.route` (шаблон chi или `unmatched`), `http.status_code`:
 
-Метрики будут доступны по адресу `http://<server-host>:<server-port>/metrics`
+| Метрика | Тип |
+|---|---|
+| `http.server.request.count` | счётчик |
+| `http.server.request.duration` | гистограмма, с |
+| `http.server.request.size`, `http.server.response.size` | гистограмма, байты |
+| `http.server.active_requests` | up-down счётчик, только метка `http.method` |
 
-### OTLP gRPC
+gRPC, метки `grpc.method`, `grpc.status`:
 
-```go
-cfg := metrics.Config{
-    Exporter:     "otlp-grpc",
-    OTLPEndpoint: "localhost:4317",
-    OTLPInsecure: true,
-    MetricInterval: 60, // экспорт каждые 60 секунд
-}
-```
+| Метрика | |
+|---|---|
+| `grpc.server.request.count`, `grpc.server.request.duration` (с) | сервер |
+| `grpc.server.request.size`, `grpc.server.response.size`, `grpc.server.active_requests`, `grpc.server.stream.messages` | сервер |
+| `grpc.client.*` — те же имена | клиент (`UnaryClientInterceptor`/`StreamClientInterceptor`) |
 
-### OTLP HTTP
+Плюс `app.build.info` (в Prometheus — `app_build_info`) = 1 с метками `service`, `version`,
+`environment`, `go_version`, `revision`. В Prometheus точки в именах становятся `_`, к счётчикам
+добавляется `_total`, к единицам — суффикс (`http_server_request_duration_seconds`).
 
-```go
-cfg := metrics.Config{
-    Exporter:     "otlp-http",
-    OTLPEndpoint: "localhost:4318",
-    OTLPInsecure: true,
-    MetricInterval: 60,
-}
-```
+## Связь с другими пакетами
 
-## Интеграция с наблюдаемостью
+- `telegram/app` вызывает `InitMeterProvider` сам и отдаёт `/metrics` на служебном порту.
+- `http/server`: middleware подключается опцией `httpserver.WithMiddlewares(metrics.Middleware(name))`;
+  `/metrics` — на отдельном порту при `HTTP_METRICS_ENABLED=true`.
+- `grpc/server` и `grpc/client` подключают интерсепторы сами (`GRPC_METRICS_ENABLED`, `EnableMetrics`).
+- `connections/postgres`, `connections/redis`, `http/client`, `telegram/*`, `observability/health`
+  пишут метрики в глобальный провайдер.
 
-Пакет разработан для совместной работы с другими компонентами observability:
-- `observability/logger` - структурированное логирование
-- `observability/tracing` - распределенная трассировка
+## Подводные камни
 
-Все три компонента используют OpenTelemetry для унифицированного подхода к наблюдаемости.
-
+- `InitMeterProvider` при `Enabled=false` возвращает `nil`: `mp.Shutdown` без проверки на `nil` упадёт.
+- Prometheus-экспортер регистрируется в глобальном `prometheus.DefaultRegisterer` один раз на
+  процесс; повторный `InitMeterProvider` с `prometheus` (например, в тестах) вернёт ошибку
+  дублирующейся регистрации.
+- `Middleware`, обёрнутый вокруг роутера снаружи (а не `router.Use`), не видит шаблон
+  маршрута: все запросы получат `http.route="unmatched"`.

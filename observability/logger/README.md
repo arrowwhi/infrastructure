@@ -1,307 +1,126 @@
-## Logger
+# observability/logger
 
-Лёгкая обёртка над `zerolog` с поддержкой:
-- Глобального логгера с инициализацией один раз
-- Маскирования чувствительных данных (телефон, карта, email, пароли) на уровне `io.Writer`
-- Удобных пакетных функций: `Info(ctx)`, `Warn(ctx)`, `Debug(ctx)`, `Error(ctx)`, `Fatal(ctx)`
-- Автоматического извлечения полей из `context.Context`
-- Гибкой конфигурации: уровень, стек‑трейсы, человеко‑читаемый вывод, маскирование
-- Постоянных полей (`With()`, `WithContext()`)
+Глобальный структурированный логгер поверх [zerolog](https://github.com/rs/zerolog).
+Пакетные функции `Info(ctx)`, `Warn(ctx)`, `Error(ctx)`… сами добавляют в запись
+`trace_id`/`span_id` активного спана и поля из контекста, а маскирование на уровне
+`io.Writer` скрывает телефоны, карты, e-mail и пароли до того, как строка попадёт в вывод.
+Остальные пакеты библиотеки пишут логи через него.
 
-### Установка
+## Подключение
 
 ```bash
-go get "github.com/arrowwhi/infrastructure/observability/logger"
+go get github.com/arrowwhi/infrastructure@latest
 ```
-
-### Конфигурация
-
-```go
-type Config struct {
-    Level        string // debug, info, warn, error, fatal
-    Stacktrace   bool   // добавляет стек-трейсы для Error
-    PrettyOutput bool   // человеко-читаемый формат
-    Masking      bool   // автоматическое маскирование данных
-}
-```
-
-- **Level** — уровень логирования (`debug`, `info`, `warn`, `error`, `fatal`)
-- **Stacktrace** — добавляет стек-трейс при вызове `Error()`
-- **PrettyOutput** — человеко‑читаемый формат для локальной разработки
-- **Masking** — автоматическое маскирование чувствительных данных
-
-### Инициализация
 
 ```go
 import "github.com/arrowwhi/infrastructure/observability/logger"
+```
+
+## Пример
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+
+	"github.com/arrowwhi/infrastructure/observability/logger"
+)
 
 func main() {
-    cfg := &logger.Config{
-        Level:        "info",
-        Stacktrace:   true,
-        PrettyOutput: false, // true для локальной разработки
-        Masking:      true,  // рекомендуется в проде
-    }
+	ctx := context.Background()
 
-    // Инициализация глобального логгера (вызывается один раз)
-    // Параметры app, version, environment добавляются в каждый лог
-    logger.Init(cfg, "my-service", "1.0.0", "production")
+	logger.Init(&logger.Config{
+		Level:   "info",
+		Masking: true,
+	}, "my-service", "1.0.0", "production")
 
-    // Готово к использованию
-    logger.Info(ctx).Msg("application started")
+	logger.Info(ctx).Str("user_id", "42").Msg("user logged in")
+	logger.Error(ctx).Err(errors.New("boom")).Str("op", "createOrder").Msg("operation failed")
 }
 ```
-
-### App, Version и Environment
-
-Параметры `app`, `version` и `environment` добавляются в каждый лог автоматически как постоянные поля. Это позволяет легко фильтровать логи по сервису, версии и окружению в системах мониторинга.
 
 ```json
-{
-  "level": "info",
-  "app": "my-service",
-  "version": "1.0.0",
-  "env": "production",
-  "time": "2025-11-13T08:09:10+03:00",
-  "message": "application started"
-}
+{"level":"info","app":"my-service","version":"1.0.0","env":"production","user_id":"42","time":"...","message":"user logged in"}
 ```
 
-Эти поля можно оставить пустыми (передать `""`), если они не нужны:
+Если `ctx` несёт активный спан (например, внутри HTTP-обработчика с трейсингом), в запись
+автоматически попадают `"trace_id"` и `"span_id"` — по ним Grafana/Loki связывает лог с трейсом.
+
+### Поля из контекста
 
 ```go
-logger.Init(cfg, "", "", "")  // без app/version/env полей
-```
+type ctxKey string
 
-### Базовое использование
+logger.SetContextKeys("request_id")                 // ключи-строки из ctx.Value
+ctx = context.WithValue(ctx, "request_id", "req-1") //nolint:staticcheck // ключ должен быть строкой
 
-```go
-ctx := context.Background()
-
-// Простое логирование
-logger.Info(ctx).Msg("application started")
-logger.Debug(ctx).Str("component", "db").Msg("connecting to database")
-logger.Warn(ctx).Int("retry", 3).Msg("retrying operation")
-
-// Логирование ошибок
-if err != nil {
-    logger.Error(ctx).
-        Err(err).
-        Str("operation", "createOrder").
-        Int("userId", 123).
-        Msg("operation failed")
-}
-
-// Fatal завершает приложение с os.Exit(1)
-logger.Fatal(ctx).Msg("critical error occurred")
-```
-
-### Работа с контекстом
-
-#### Автоматическое извлечение полей
-
-```go
-// Настройка извлечения полей из контекста
-logger.SetContextKeys("request_id", "user_id", "trace_id")
-
-// Добавление значений в контекст
-ctx = context.WithValue(ctx, "request_id", "req-123")
-ctx = context.WithValue(ctx, "user_id", "user-456")
-
-// Поля автоматически добавятся в лог
-logger.Info(ctx).Msg("processing request")
-// Output: {"level":"info","request_id":"req-123","user_id":"user-456","message":"processing request"}
-```
-
-#### Кастомный экстрактор
-
-```go
-// Для более сложной логики
-logger.SetContextExtractor(func(evt *zerolog.Event, ctx context.Context) *zerolog.Event {
-    if reqID := ctx.Value("request_id"); reqID != nil {
-        evt = evt.Str("req_id", reqID.(string))
-    }
-    if user := getUserFromContext(ctx); user != nil {
-        evt = evt.Str("user_email", user.Email)
-    }
-    return evt
+// Для типизированных ключей — свой экстрактор:
+logger.SetContextExtractor(func(e *zerolog.Event, ctx context.Context) *zerolog.Event {
+	if v, ok := ctx.Value(ctxKey("tenant")).(string); ok {
+		e = e.Str("tenant", v)
+	}
+	return e
 })
 ```
 
-### Постоянные поля
-
-#### With() - базовые постоянные поля
+### Логгер с постоянными полями и «сырые» zerolog-логгеры
 
 ```go
-// Создание логгера с постоянными полями
-serviceLogger := logger.With().
-    Str("service", "payment").
-    Str("version", "1.0.0").
-    Logger()
+l := logger.With().Str("component", "grpc-client").Logger() // zerolog.Logger
+l.Info().Msg("started")                                      // trace_id сюда сам не попадёт
 
-// Все логи будут содержать эти поля
-serviceLogger.Info().Msg("service started")
-// Output: {"level":"info","service":"payment","version":"1.0.0","message":"service started"}
+traced := l.Hook(logger.TraceHook{})
+traced.Info().Ctx(ctx).Msg("call") // TraceHook берёт trace_id/span_id из Event.Ctx(ctx)
 ```
 
-#### WithContext() - поля из контекста
+## Конфигурация
 
-```go
-// Извлечение полей из контекста при создании логгера
-ctx = context.WithValue(ctx, "request_id", "req-123")
-ctx = context.WithValue(ctx, "user_id", "user-456")
+Префикс переменных задаёт тот, кто встраивает `Config`; в `telegram/app` это `LOG_`.
 
-requestLogger := logger.WithContext(ctx, "request_id", "user_id").Logger()
+| Переменная (`telegram/app`) | По умолчанию | Смысл |
+|---|---|---|
+| `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` (неизвестное значение → `info`) |
+| `LOG_PRETTYOUTPUT` | `false` | человекочитаемый цветной вывод для локальной разработки |
+| `LOG_MASKING` | `true` | маскирование чувствительных полей |
+| `LOG_STACKTRACE` | `false` | зарезервировано, сейчас ни на что не влияет |
 
-// Все логи от этого логгера будут содержать поля из контекста
-requestLogger.Info().Msg("request started")
-requestLogger.Info().Msg("request completed")
-```
+## Что маскируется
 
-### Маскирование данных
+При `Masking: true` вывод проходит через [`utils/masking`](../../utils/masking/README.md):
 
-При `Masking: true` автоматически маскируются:
+| Поле (по имени ключа) или значение | Пример |
+|---|---|
+| ключ `*phone*` | `+7 (999) 123-45-67` → `+* (***) ***-45-67` |
+| ключ `card`, `cardNumber`; число из 16+ цифр в любой строке | `4111111111111111` → `41**********1111` |
+| ключ `full_name`, `fullname` | `Иван Иванов` → `**** ******` |
+| ключ `email`, `e-mail`, `e_mail`; строка-e-mail целиком | `john.doe@example.com` → `********@example.com` |
+| ключ `*password*`, `*token*`, `*secret*` | → `*****` |
 
-```go
-logger.Info(ctx).
-    Str("phone", "+7 (999) 123-45-67").      // -> "+7 (9**) ***-**-67"
-    Str("card", "4111111111111111").         // -> "411111******1111"
-    Str("email", "user@example.com").        // -> "us**@example.com"
-    Str("password", "secret123").            // -> "*****"
-    Str("full_name", "Иван Иванов").         // -> "И*** И*****"
-    Msg("user data logged")
-```
+## Метрики, трейсы, логи
 
-Маскирование работает на уровне `io.Writer` и применяется ко всем логам автоматически.
+Метрик и трейсов не пишет. Поля каждой записи: `level`, `time`, `message`, `app`, `version`,
+`env` (пустые параметры `Init` не добавляются), `trace_id`/`span_id` при активном спане.
 
-### Типы полей
+## Связь с другими пакетами
 
-Поддерживаемые типы для добавления полей:
+- `telegram/app` вызывает `logger.Init` сам из `app.Config.Logger`.
+- `http/server`, `grpc/server`, `telegram/bot`, `connections/postgres` пишут через пакетные
+  функции — их логи получают `trace_id` автоматически.
+- `grpc/client` принимает `*zerolog.Logger` и сам навешивает `TraceHook`; передайте
+  `l := logger.With().Logger(); client.NewClient(&cfg, &l)`.
 
-```go
-logger.Info(ctx).
-    Str("string", "value").
-    Bool("active", true).
-    Int("count", 42).
-    Int64("bignum", 123456789).
-    Uint64("unsigned", 999).
-    Float64("price", 99.99).
-    Bytes("data", []byte("binary")).
-    Time("created", time.Now()).
-    Dur("elapsed", time.Second).
-    Err(err).
-    Any("complex", customStruct).
-    Msg("all types example")
-```
+## Подводные камни
 
-### Продвинутые примеры
-
-#### HTTP middleware с контекстными полями
-
-```go
-func LoggingMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        requestID := uuid.New().String()
-        ctx := context.WithValue(r.Context(), "request_id", requestID)
-        ctx = context.WithValue(ctx, "method", r.Method)
-        ctx = context.WithValue(ctx, "path", r.URL.Path)
-
-        logger.Info(ctx).Msg("request started")
-        
-        next.ServeHTTP(w, r.WithContext(ctx))
-        
-        logger.Info(ctx).Msg("request completed")
-    })
-}
-```
-
-#### Логирование с метриками производительности
-
-```go
-func ProcessOrder(ctx context.Context, order Order) error {
-    start := time.Now()
-    
-    logger.Info(ctx).
-        Str("order_id", order.ID).
-        Msg("processing order")
-
-    // ... business logic ...
-
-    logger.Info(ctx).
-        Str("order_id", order.ID).
-        Dur("duration", time.Since(start)).
-        Msg("order processed successfully")
-
-    return nil
-}
-```
-
-#### Структурированное логирование ошибок
-
-```go
-func HandleError(ctx context.Context, err error, operation string) {
-    logger.Error(ctx).
-        Err(err).
-        Str("operation", operation).
-        Str("error_type", fmt.Sprintf("%T", err)).
-        Stack().  // добавит стек при Stacktrace: true
-        Msg("operation failed")
-}
-```
-
-### JSON vs Pretty Output
-
-#### JSON (production)
-
-```go
-cfg := &logger.Config{
-    Level:        "info",
-    PrettyOutput: false,
-}
-// Output: {"level":"info","time":"2024-01-15T12:34:56Z","message":"user logged in","user_id":"123"}
-```
-
-#### Pretty (development)
-
-```go
-cfg := &logger.Config{
-    Level:        "debug",
-    PrettyOutput: true,
-}
-// Output: 15.01.2024 12:34:56 INFO | user logged in | user_id=123
-```
-
-### Рекомендации
-
-- **Production**: `PrettyOutput: false`, `Masking: true`, `Level: "info"`
-- **Development**: `PrettyOutput: true`, `Masking: false`, `Level: "debug"`
-- **Staging**: `PrettyOutput: false`, `Masking: true`, `Level: "debug"`
-
-### Best Practices
-
-1. **Используйте контекст для трейсинга**: передавайте `context.Context` через все слои приложения
-2. **Настройте SetContextKeys() один раз**: в `main()` или `init()`
-3. **Избегайте логирования в циклах**: агрегируйте данные и логируйте итоги
-4. **Не логируйте пароли напрямую**: даже с маскированием, лучше вообще не логировать
-5. **Используйте уровни логирования правильно**:
-   - `Debug`: детальная отладочная информация
-   - `Info`: важные события в нормальном потоке
-   - `Warn`: потенциальные проблемы, не критичные
-   - `Error`: ошибки, требующие внимания
-   - `Fatal`: критические ошибки, приводящие к остановке
-
-### Примечания
-
-- `Init()` использует `sync.Once` — безопасно вызывать многократно, но инициализируется только один раз
-- `Fatal().Msg()` логирует и завершает процесс через `os.Exit(1)`
-- Маскирование выполняется на уровне `io.Writer` до записи в output
-- Все функции логирования потокобезопасны
-- API следует паттерну method chaining из zerolog
-
-### Производительность
-
-Логгер основан на `zerolog` — одной из самых быстрых библиотек логирования для Go:
-- Нулевые аллокации для базовых типов
-- Отложенная сериализация JSON
-- Эффективная работа с memory pool
-- Маскирование работает in-place где возможно
+- `Init` срабатывает один раз (`sync.Once`): повторные вызовы игнорируются. До `Init`
+  используется временный логгер уровня `debug` без маскирования.
+- `trace_id` появляется только если передать в `Info(ctx)` контекст со спаном; `context.Background()`
+  его не несёт.
+- `SetContextKeys` ищет значения по **строковым** ключам `ctx.Value("key")`; для типизированных
+  ключей используйте `SetContextExtractor`.
+- `Fatal(ctx).Msg(...)` завершает процесс через `os.Exit(1)` — отложенные функции не выполнятся.
+- Маскирование стоит CPU на каждой записи; не выключайте его в проде ради скорости — лучше не
+  логировать большие тела.
+- `logger.New` возвращает `*Logger` без экспортированных методов; для собственного логгера
+  используйте `logger.With()...Logger()`.

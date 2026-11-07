@@ -1,85 +1,151 @@
 # connections/postgres
 
 Коннектор к PostgreSQL поверх [pgx v5](https://github.com/jackc/pgx): пул соединений,
-трейсинг и метрики OpenTelemetry, транзакции через контекст, безопасные повторы,
-разделение чтения и записи и набор хелперов для нестандартных задач.
+трейсинг и метрики OpenTelemetry (выключены по умолчанию и без накладных расходов),
+транзакции через контекст с `SAVEPOINT` и перезапуском при конфликте сериализации,
+повторы только гарантированно безопасных запросов, серверные таймауты, failover и реплики,
+`Healthcheck` для `observability/health`, генерик-хелперы `Get[T]`/`Select[T]`, `COPY`, batch,
+query builder, advisory locks и LISTEN/NOTIFY. Миграции — в подпакете [`migrate`](migrate/README.md).
+
+## Подключение
+
+```bash
+go get github.com/arrowwhi/infrastructure@latest
+```
 
 ```go
 import "github.com/arrowwhi/infrastructure/connections/postgres"
 ```
 
-## Быстрый старт
+## Пример
 
 ```go
-cfg := postgres.DefaultConfig()
-cfg.Host = "db.internal"
-cfg.User = "svc"
-cfg.Password = os.Getenv("DB_PASSWORD")
-cfg.Database = "orders"
+package main
 
-pool, err := postgres.New(ctx, cfg)
-if err != nil {
-    return err
-}
-defer pool.Close()
-```
+import (
+	"context"
+	"log"
+	"os"
 
-`Config` размечен тегами `env` и `yaml`, поэтому обычно он приезжает из общего конфига
-сервиса, а не собирается руками.
-
-## Инструментация
-
-**По умолчанию выключена.** Когда `TracingEnabled` и `MetricsEnabled` равны `false`,
-трейсер не создаётся вовсе — `ConnConfig.Tracer` остаётся `nil`, и pgx не тратит
-ни такта на его вызовы. Накладные расходы строго нулевые, а не «небольшие».
-
-Включается без пересборки:
-
-```bash
-DB_TRACING_ENABLED=true
-DB_METRICS_ENABLED=true
-DB_SLOW_QUERY_LOG=true
-DB_SLOW_QUERY_THRESHOLD=200ms
-```
-
-Либо программно, если нужно передать провайдеры или атрибуты:
-
-```go
-pool, err := postgres.New(ctx, cfg,
-    postgres.WithTracing(),
-    postgres.WithMetrics(),
-    postgres.WithSlowQueryLog(200*time.Millisecond),
-    postgres.WithMeterProvider(mp),
-    postgres.WithAttributes(attribute.String("shard", "eu-1")),
+	"github.com/arrowwhi/infrastructure/connections/postgres"
 )
+
+type User struct {
+	ID   int64  `db:"id"`
+	Name string `db:"name"`
+}
+
+func main() {
+	ctx := context.Background()
+
+	cfg := postgres.DefaultConfig()
+	cfg.Host = "localhost"
+	cfg.User = "svc"
+	cfg.Password = os.Getenv("DB_PASSWORD")
+	cfg.Database = "app"
+	cfg.TracingEnabled = true
+	cfg.MetricsEnabled = true
+
+	pool, err := postgres.New(ctx, cfg) // проверяет доступность базы
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx = postgres.WithQueryName(ctx, "user.get_by_id") // метка db.query.name в метриках
+	user, err := postgres.Get[User](ctx, pool, `SELECT id, name FROM users WHERE id = $1`, 42)
+	if postgres.IsNoRows(err) {
+		log.Println("not found")
+		return
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = pool.InTx(ctx, func(ctx context.Context) error {
+		_, err := pool.Exec(ctx, `UPDATE users SET name = $1 WHERE id = $2`, user.Name+"!", user.ID)
+		return err
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
 ```
+
+## Конфигурация
+
+`Config` обычно приезжает из общего конфига сервиса (`app.LoadConfig`). Без `env-prefix` имена такие:
+
+| Переменная | По умолчанию | Смысл |
+|---|---|---|
+| `DB_DSN` | — | готовая строка подключения; если задана, поля ниже до `DB_SSLMODE` игнорируются |
+| `DB_HOST`, `DB_PORT` | `localhost`, `5432` | хост (можно список через запятую — failover) и порт |
+| `DB_USER`, `DB_PASSWORD`, `DB_DATABASE` | — | учётные данные; `DB_USER` и `DB_DATABASE` обязательны без `DB_DSN` |
+| `DB_SSLMODE` | `disable` | `disable`, `require`, `verify-ca`, `verify-full` |
+| `DB_TARGET_SESSION_ATTRS` | — | `read-write` — перебирать хосты до живого мастера |
+| `DB_REPLICA_HOSTS` | — | реплики через запятую для `postgres.ReadOnly(ctx)` |
+| `DB_APPLICATION_NAME` | — | `application_name` в `pg_stat_activity` |
+| `DB_MAX_CONNS`, `DB_MIN_CONNS` | `20`, `5` | размер пула |
+| `DB_MAX_CONN_LIFETIME`, `DB_MAX_CONN_IDLE_TIME` | `30m`, `2m` | ротация соединений |
+| `DB_CONNECT_TIMEOUT` | `5s` | установка соединения |
+| `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT`, `DB_IDLE_IN_TX_SESSION_TIMEOUT` | — | серверные таймауты |
+| `DB_QUERY_EXEC_MODE` | `cache_statement` | см. «Режим выполнения запросов» |
+| `DB_TRACING_ENABLED`, `DB_METRICS_ENABLED` | `false`, `false` | инструментация |
+| `DB_QUERY_LOG_ENABLED` | `false` | лог каждого запроса (дорого) |
+| `DB_SLOW_QUERY_LOG`, `DB_SLOW_QUERY_THRESHOLD` | `false`, `200ms` | лог медленных запросов |
+| `DB_HEALTHCHECK_ACQUIRE_THRESHOLD` | `1s` | `Healthcheck` падает, если соединение из пула ждали дольше |
+| `DB_TLS_ENABLED`, `DB_TLS_CA_FILE`, `DB_TLS_CERT_FILE`, `DB_TLS_KEY_FILE`, `DB_TLS_SERVER_NAME` | — | TLS/mTLS файлами |
+| `DB_TLS_CA_DATA`, `DB_TLS_CERT_DATA`, `DB_TLS_KEY_DATA`, `DB_TLS_BASE64`, `DB_TLS_INSECURE_SKIP_VERIFY` | — | сертификаты содержимым (в т.ч. base64) |
+
+Опции `New`: `WithTracing`/`WithoutTracing`, `WithMetrics`/`WithoutMetrics`, `WithSlowQueryLog(d)`,
+`WithQueryLogging`, `WithTracerProvider`, `WithMeterProvider`, `WithAttributes`, `WithServiceName`,
+`WithBeforeConnect`/`WithAfterConnect`, `WithRetryPolicy`, `WithQueryTracer`.
+
+## Метрики, трейсы, логи
+
+**По умолчанию выключены.** Когда `TracingEnabled` и `MetricsEnabled` равны `false`, трейсер
+не создаётся вовсе — `ConnConfig.Tracer` остаётся `nil`, накладных расходов нет.
+
+- Метрики: `db.client.operation.duration` (с), `db.client.operation.errors` (метка
+  `db.response.status_code` — SQLSTATE), `db.client.batch.size`, плюс статистика пула otelpgx
+  (`pgxpool.*`). Основные метки — `db.query.name` и `db.operation.name`.
+- Трейсы ([otelpgx](https://github.com/exaring/otelpgx), скрыт внутри пакета): спан на запрос, batch,
+  `COPY`; `db.statement` — текст SQL. **Аргументы запросов — никогда**:
+  параметры содержат персональные данные.
+- Логи через `observability/logger` (включаются при `DB_SLOW_QUERY_LOG` или `DB_QUERY_LOG_ENABLED`):
+  ошибки запросов — `error` (кроме «нет строк»), медленные — `warn`, все запросы — `debug`
+  (нужен `LOG_LEVEL=debug`). При включённых метриках — однократное предупреждение на каждый SQL без имени.
 
 ### Имена запросов
 
-Метрики размечаются меткой `db.query.name`. Имя задаётся через контекст:
+Имя задаётся через контекст: `ctx = postgres.WithQueryName(ctx, "user.get_by_id")`. Без имени запрос
+попадает в метрики как `db_query_name="unknown"`, а в лог один раз падает предупреждение — по одному
+на уникальный текст SQL. Разбивать метрики по тексту SQL нельзя (кардинальность), поэтому имя —
+из ограниченного набора: `user.get_by_id`, а не идентификатор конкретной сущности.
 
-```go
-ctx = postgres.WithQueryName(ctx, "user.get_by_id")
-user, err := postgres.Get[User](ctx, pool, `SELECT * FROM users WHERE id = $1`, id)
-```
+## Связь с другими пакетами
 
-Без имени запрос попадает в метрику как `query_name="unknown"`, а в лог один раз
-падает предупреждение — по одному на уникальный текст SQL, а не на каждый вызов.
+- Health: `a.Health().Register("postgres", pool.Healthcheck)` — проверяет и доступность базы,
+  и исчерпание пула.
+- Остановка: `a.OnShutdown(func(context.Context) error { pool.Close(); return nil })`.
+- Трейсы и метрики — в глобальные провайдеры `observability/tracing`/`observability/metrics`
+  (или `telegram/app`); свои — `WithTracerProvider`/`WithMeterProvider`.
+- `telegram/state.NewPostgres(pool, "")` — хранилище шагов диалога бота.
+- `utils/txmanager` — только для транзакции, общей с Redis; для PostgreSQL достаточно `pool.InTx`.
 
-Разбивать метрики по тексту SQL нельзя: кардинальность взорвётся. Поэтому имя задаётся
-явно и должно быть из ограниченного набора значений — `user.get_by_id`, а не идентификатор
-конкретной сущности.
+## Подводные камни
 
-### Что попадает в трейсы и логи
-
-Текст SQL — да. **Аргументы запроса — никогда.** Единая политика важнее удобства отладки:
-параметры содержат персональные данные, и один незакрытый случай сводит на нет всё маскирование.
-
-Трейсинг построен на [otelpgx](https://github.com/exaring/otelpgx), но он полностью скрыт
-внутри пакета: сервисы его не импортируют и настраивают всё через `Config` и `Option`.
-
-Метрики: `db.client.operation.duration` (гистограмма), `db.client.operation.errors`
-(счётчик с меткой SQLSTATE), `db.client.batch.size`, плюс статистика пула.
+- Метрики без `WithQueryName` почти бесполезны: всё сольётся в `unknown`.
+- `ReadOnly(ctx)` уводит запрос на реплику с отставанием — не для «записал и тут же прочитал»;
+  внутри транзакции даёт `ErrReadOnlyInTx`.
+- `RunWith` у query builder не используйте: запрос пройдёт мимо трейсинга, метрик и повторов.
+- Отмена по `ctx` не гарантирует остановку запроса на сервере — задавайте `DB_STATEMENT_TIMEOUT`.
+- `WithAdvisoryLock` не ждёт освобождения блокировки, а сразу возвращает `ErrLockNotAcquired`.
+- Для `DB_USER`/`DB_PASSWORD`/`DB_DATABASE` стоит тег `required`, который cleanenv не проверяет;
+  пустые значения ловит `Config.Validate` при `New` (кроме пароля).
+- Гистограмма `db.client.operation.duration` создаётся без явных границ — используются границы OTel
+  по умолчанию (0, 5, 10, 25… — рассчитанные на миллисекунды), и почти все запросы попадают в
+  первый бакет. До исправления в коде задайте границы View в своём `MeterProvider`.
 
 ## Транзакции
 
@@ -258,8 +324,8 @@ var migrations embed.FS
 err := migrate.Up(ctx, pool, migrations, "migrations")
 ```
 
-Миграции выполняются под advisory-блокировкой, поэтому одновременный старт нескольких
-подов безопасен: применит ровно один, остальные подождут.
+Миграции выполняются под advisory-блокировкой без ожидания: второй одновременно стартующий
+экземпляр получит `postgres.ErrLockNotAcquired`. Подробнее — [`migrate`](migrate/README.md).
 
 ## Failover и подключение
 
@@ -356,7 +422,6 @@ make load-test        # нагрузка на 30 секунд — с ней гр
 | `GET /api/users/123` | `SELECT` пользователя |
 | `GET /api/users/999` | Тот же `SELECT`, но строк нет → `IsNoRows` → 404 |
 | `POST /api/orders` | Транзакция: `BEGIN` → `SELECT ... FOR UPDATE` → `INSERT` → `COMMIT` |
-| `GET /readiness` | `Healthcheck` со статистикой пула |
 
 ### Трейсы — Jaeger, http://localhost:16686
 

@@ -1,153 +1,114 @@
-## TxManager — единый менеджер транзакций (Postgres + Redis)
+# utils/txmanager
 
-Коротко: даёт удобный способ запускать бизнес-операции в одной «логической» транзакции сразу для Postgres и Redis. В коде вы работаете только с `context.Context` и `txmanager.TxManager`.
+Координатор одной логической операции сразу в PostgreSQL и Redis: открывает транзакцию PostgreSQL
+и `MULTI/EXEC`-конвейер Redis, кладёт их в `context.Context`, а в конце сначала выполняет конвейер
+Redis и только потом коммитит PostgreSQL — ошибка Redis успевает откатить базу. Для транзакций
+только по PostgreSQL пакет не нужен: используйте `postgres.Pool.InTx` (точки сохранения, перезапуск
+при конфликте сериализации, откат при панике).
 
-### Установка
+## Подключение
 
 ```bash
-go get github.com/arrowwhi/infrastructure/utils/txmanager
+go get github.com/arrowwhi/infrastructure@latest
 ```
 
-### Как это работает
+```go
+import "github.com/arrowwhi/infrastructure/utils/txmanager"
+```
 
-- `Begin(ctx)` — кладёт в контекст `pgx.Tx` и `redis.Pipeliner` (если подключены).
-- `CommitOrRollback(ctx, &err)` — на основе `err` коммитит или откатывает:
-  - если был Redis pipeline — сначала `Exec()`, затем `pgx.Commit()`;
-  - при любой ошибке — `pgx.Rollback()`.
-- В репозиториях вы просто читаете из контекста активную транзакцию.
-
----
-
-# Postgres
-
-### Объявить менеджер транзакций и прокинуть в сервисный слой
+## Пример
 
 ```go
+package main
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/arrowwhi/infrastructure/connections/postgres"
+	"github.com/arrowwhi/infrastructure/connections/redis"
+	"github.com/arrowwhi/infrastructure/utils/txmanager"
+)
+
 type Service struct {
-    TxManager *txmanager.TxManager
-    Repo      *Repository
+	tm   *txmanager.TxManager
+	pool *postgres.Pool
+}
+
+// Rename обновляет имя в базе и сбрасывает кэш в одной логической операции.
+func (s *Service) Rename(ctx context.Context, id int64, name string) (err error) {
+	ctx, err = s.tm.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.tm.CommitOrRollback(ctx, &err) // именованный err обязателен
+
+	// pool сам подхватывает транзакцию из ctx.
+	if _, err = s.pool.Exec(ctx, `UPDATE users SET name = $1 WHERE id = $2`, name, id); err != nil {
+		return err
+	}
+
+	// Команда встаёт в конвейер и выполнится в CommitOrRollback.
+	txmanager.GetRedisTx(ctx).Set(ctx, "user:name:42", name, time.Hour)
+
+	return nil
+}
+
+func main() {
+	ctx := context.Background()
+
+	cfg := postgres.DefaultConfig()
+	cfg.User, cfg.Database = "svc", "app"
+
+	pool, err := postgres.New(ctx, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	rdb, err := redis.New(ctx, redis.Config{Addr: "localhost:6379"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rdb.Close()
+
+	svc := &Service{tm: txmanager.New(pool, rdb.Client), pool: pool}
+	if err = svc.Rename(ctx, 42, "Иван"); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 
-### Репозиторий с sqlc: обёртка для работы в транзакции
+Только одно хранилище — `BeginPostgres(ctx)` или `BeginRedis(ctx)` вместо `Begin`; `CommitOrRollback`
+завершает то, что есть в контексте.
 
-Добавьте хелпер, который «переключит» `sqlc.Queries` на `pgx.Tx`, если транзакция есть в контексте.
+## Конфигурация
 
-```go
-// postgres.go
-package postgres
+Нет. `txmanager.New(pool, redisClient)` — любой аргумент может быть `nil`, тогда соответствующий
+`Begin*` вернёт `ErrPostgresNotInitialized` / `ErrRedisNotInitialized`.
 
-import (
-    "context"
-    "github.com/arrowwhi/infrastructure/utils/txmanager"
-    "your/module/internal/sqlc" // сгенерированный sqlc пакет
-)
+## Метрики, трейсы, логи
 
-func InTx(ctx context.Context, queries *sqlc.Queries) *sqlc.Queries {
-    if tx := txmanager.GetPgTx(ctx); tx != nil {
-        return queries.WithTx(tx)
-    }
-    return queries
-}
-```
+Своих нет: запросы идут через `connections/postgres` и клиент Redis и попадают в их метрики и трейсы.
 
-Использование в методах репозитория:
+## Связь с другими пакетами
 
-```go
-type Repository struct {
-    queries *sqlc.Queries
-}
+- [`connections/postgres`](../../connections/postgres/README.md): транзакция открывается через
+  `Pool.Begin`, поэтому `pool.Query/Exec`, `postgres.Get[T]` и т.п. с этим `ctx` работают внутри неё —
+  доставать транзакцию из контекста в репозиториях не нужно (`GetPgTx` устарел).
+- [`connections/redis`](../../connections/redis/README.md): передавайте встроенный клиент `rdb.Client`.
+- Для кода на sqlc: `pgx.Tx` — `tx.Raw()` у `postgres.TxFromContext(ctx)`.
 
-func (r *Repository) Create(ctx context.Context, input any) error {
-    q := postgres.InTx(ctx, r.queries)
-    return q.Create(ctx, input)
-}
-```
+## Подводные камни
 
-Если транзакция есть — вызовы пойдут внутри неё; если нет — будут выполнены отдельными запросами.
-
-### Сервис: несколько операций в одной транзакции
-
-```go
-func (s *Service) Create(ctx context.Context, data any) (err error) {
-    ctx, err = s.TxManager.BeginPostgres(ctx)
-    if err != nil {
-        return err
-    }
-    defer s.TxManager.CommitOrRollback(ctx, &err)
-
-    if err = s.Repo.Create(ctx, data); err != nil {
-        return err
-    }
-
-    // любые дополнительные операции, видящие ту же транзакцию через ctx
-    // ...
-
-    return nil
-}
-```
-
-Нюанс: возвращайте именованный `err`, чтобы `defer` мог корректно закоммитить/откатить.
-
----
-
-## Redis (необязательно)
-
-Если при инициализации передан `*redis.Client`, `Begin(ctx)` положит в контекст `redis.Pipeliner`. Коммит/откат уже покрыт `CommitOrRollback`.
-
-Как использовать pipeline в репозитории:
-
-```go
-import (
-    "context"
-    "github.com/arrowwhi/infrastructure/utils/txmanager"
-)
-
-type CacheRepo struct { /* ... */ }
-
-func (r *CacheRepo) SetUser(ctx context.Context, key string, val string) error {
-    if p := txmanager.GetRedisTx(ctx); p != nil {
-        p.Set(ctx, key, val, 0) // попадает в pipeline; выполнится в CommitOrRollback
-        return nil
-    }
-    // без транзакции — обычный клиент
-    // r.client.Set(ctx, key, val, 0)
-    return nil
-}
-```
-
-Порядок коммита: сначала Redis pipeline (`Exec()`), затем Postgres (`Commit()`). Если `Exec()` упал — будет `Rollback()` Postgres и ошибка вверх.
-
----
-
-## Обработка ошибок и best practices
-
-- Всегда используйте именованный `err` в сервисных методах с `defer CommitOrRollback`.
-- Не создавайте вложенные транзакции — просто пробрасывайте `ctx` глубже по вызовам.
-- Репозитории должны быть «тупыми»: брать транзакцию из `ctx` и работать через неё, если она есть.
-- Если `TxManager` инициализирован не полностью, `BeginPostgres/BeginRedis` вернут осмысленную ошибку (см. `errors.go`).
-
----
-
-## Мини‑FAQ
-
-- Можно ли использовать только Postgres или только Redis? — Да. Передайте `nil` вместо ненужного клиента, соответствующая часть просто не активируется.
-- Что если я забуду `defer CommitOrRollback`? — Postgres транзакция «повиснет». Дисциплина: всегда шаблон с именованным `err`.
-- sqlx/pgx без sqlc? — Логика та же: возьмите `pgx.Tx` из контекста и используйте его API.
-
----
-
-## Быстрый шаблон для сервисного метода
-
-```go
-func (s *Service) Do(ctx context.Context, in Input) (err error) {
-    ctx, err = s.TxManager.Begin(ctx)
-    if err != nil { return err }
-    defer s.TxManager.CommitOrRollback(ctx, &err)
-
-    // repo calls ...
-    return nil
-}
-```
-
-
+- Используйте именованный `err` и `defer CommitOrRollback(ctx, &err)`: решение «коммит или откат»
+  принимается по значению ошибки.
+- **Паника не откатывает транзакцию**: при панике `err` остаётся `nil`, и `CommitOrRollback` закоммитит
+  частично выполненную работу. Не допускайте паник внутри или перехватывайте их сами.
+- `Begin` требует оба хранилища: при `Redis == nil` он вернёт ошибку, а уже открытая транзакция
+  PostgreSQL останется незакрытой (держит соединение до таймаута `DB_IDLE_IN_TX_SESSION_TIMEOUT`).
+- Конвейер Redis — это `MULTI/EXEC`, а не транзакция с откатом: если `EXEC` прошёл, а `COMMIT`
+  PostgreSQL упал, изменения в Redis останутся. Результаты команд конвейера до `EXEC` недоступны.
+- Вложенный `Begin` с уже транзакционным `ctx` откроет в PostgreSQL `SAVEPOINT`, а в Redis — новый
+  отдельный конвейер, который выполнится раньше внешнего. Не вкладывайте — пробрасывайте `ctx`.

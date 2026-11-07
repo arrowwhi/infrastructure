@@ -1,6 +1,14 @@
 # Observability Stack
 
-Полный стек наблюдаемости для мониторинга приложений: логи, трейсы и метрики.
+Локальный стенд наблюдаемости (OTel Collector, Jaeger, Prometheus, Grafana) для примеров библиотеки.
+Документация пакетов:
+
+| Пакет | |
+|---|---|
+| [`observability/logger`](logger/README.md) | структурированные логи с `trace_id` и маскированием |
+| [`observability/metrics`](metrics/README.md) | OTel-метрики, HTTP/gRPC-инструменты, `/metrics` |
+| [`observability/tracing`](tracing/README.md) | OTel-трейсинг, сэмплинг, HTTP-middleware |
+| [`observability/health`](health/README.md) | реестр health-проверок для `/ready`, gRPC health и метрик |
 
 ## Компоненты
 
@@ -22,20 +30,14 @@
 
 ```bash
 # Из корня проекта
-docker-compose up -d
-
-# Проверить статус
-docker-compose ps
-
-# Посмотреть логи
-docker-compose logs -f
+make obs-up      # docker compose -f examples/docker-compose.yml up -d
+make obs-status  # статус
 ```
 
 ### 2. Запуск примера HTTP сервера
 
 ```bash
-# Скомпилировать и запустить
-go run ./examples/http/main.go
+make run-server  # cd examples/http && go run .
 ```
 
 ### 3. Генерация тестовых данных
@@ -93,80 +95,40 @@ hey -z 30s -c 10 http://localhost:8080/api/users/123
 
 ## Основные метрики
 
-### HTTP Server Metrics (автоматические)
+Через коллектор метрики приходят в Prometheus с префиксом `otel_` (namespace экспортёра), точки
+в именах заменяются на `_`, к единицам добавляется суффикс (`_seconds`, `_bytes`), к счётчикам — `_total`.
+Полный список метрик — в README пакетов; ниже основные запросы.
 
-#### otel_http_server_request_count
-Счетчик HTTP запросов
+### HTTP Server Metrics (`metrics.Middleware`)
+
+Метки: `http_method`, `http_route` (шаблон chi), `http_status_code`. Все длительности — в секундах.
+
 ```promql
-# Rate запросов в секунду
-rate(otel_http_server_request_count_total[5m])
-
-# Запросы по статус-кодам
-sum by(http_status_code) (rate(otel_http_server_request_count_total[5m]))
-
-# Запросы по эндпоинтам
+# RPS по маршрутам
 sum by(http_route) (rate(otel_http_server_request_count_total[5m]))
+
+# Доля 5xx
+sum(rate(otel_http_server_request_count_total{http_status_code=~"5.."}[5m]))
+  / sum(rate(otel_http_server_request_count_total[5m]))
+
+# p95 латентности по маршрутам, секунды
+histogram_quantile(0.95, sum by(le, http_route) (rate(otel_http_server_request_duration_seconds_bucket[5m])))
+
+# Активные запросы
+sum(otel_http_server_active_requests)
+
+# Средний размер ответа, байты
+rate(otel_http_server_response_size_bytes_sum[5m]) / rate(otel_http_server_response_size_bytes_count[5m])
 ```
 
-#### otel_http_server_request_duration
-Histogram длительности запросов (ms)
-```promql
-# p50, p95, p99 латентность
-histogram_quantile(0.50, sum(rate(otel_http_server_request_duration_bucket[5m])) by (le))
-histogram_quantile(0.95, sum(rate(otel_http_server_request_duration_bucket[5m])) by (le))
-histogram_quantile(0.99, sum(rate(otel_http_server_request_duration_bucket[5m])) by (le))
+### Application Business Metrics (кастомные, `examples/http`)
 
-# Средняя длительность
-rate(otel_http_server_request_duration_sum[5m]) / rate(otel_http_server_request_duration_count[5m])
-```
-
-#### otel_http_server_active_requests
-Gauge активных запросов
-```promql
-# Текущее количество активных запросов
-otel_http_server_active_requests
-
-# Максимум за период
-max_over_time(otel_http_server_active_requests[5m])
-```
-
-#### otel_http_server_request_size / otel_http_server_response_size
-Histogram размеров запросов/ответов (bytes)
-```promql
-# Средний размер запросов
-rate(otel_http_server_request_size_sum[5m]) / rate(otel_http_server_request_size_count[5m])
-
-# Средний размер ответов
-rate(otel_http_server_response_size_sum[5m]) / rate(otel_http_server_response_size_count[5m])
-```
-
-### Application Business Metrics (кастомные)
-
-#### otel_app_user_requests
-Счетчик запросов к API пользователей
 ```promql
 rate(otel_app_user_requests_total[5m])
-```
-
-#### otel_app_orders_created
-Счетчик созданных заказов
-```promql
 rate(otel_app_orders_created_total[5m])
-sum(otel_app_orders_created_total)  # Всего заказов
-```
-
-#### otel_app_errors
-Счетчик ошибок
-```promql
-rate(otel_app_errors_total[5m])
 sum by(error_type) (rate(otel_app_errors_total[5m]))
-```
-
-#### otel_app_processing_duration
-Histogram времени обработки операций (ms)
-```promql
-# Латентность по операциям
-histogram_quantile(0.95, sum by(le, operation) (rate(otel_app_processing_duration_bucket[5m])))
+# app.processing.duration в примере пока в миллисекундах
+histogram_quantile(0.95, sum by(le, operation) (rate(otel_app_processing_duration_milliseconds_bucket[5m])))
 ```
 
 ## Создание кастомных метрик
@@ -200,13 +162,13 @@ counter.Add(ctx, 1,
 histogram, _ := meter.Float64Histogram(
     "custom.duration",
     metric.WithDescription("Custom operation duration"),
-    metric.WithUnit("ms"),
+    metric.WithUnit("s"), // длительности — в секундах, как во всей библиотеке
+    metric.WithExplicitBucketBoundaries(metrics.DurationBuckets...),
 )
 
 start := time.Now()
 // ... do work ...
-duration := float64(time.Since(start).Milliseconds())
-histogram.Record(ctx, duration)
+histogram.Record(ctx, time.Since(start).Seconds())
 ```
 
 ### Gauge (UpDownCounter)
@@ -246,15 +208,15 @@ groups:
 
       - alert: HighLatency
         expr: |
-          histogram_quantile(0.95, 
-            sum(rate(otel_http_server_request_duration_bucket[5m])) by (le)
-          ) > 1000
+          histogram_quantile(0.95,
+            sum(rate(otel_http_server_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "High latency detected"
-          description: "P95 latency is {{ $value }}ms"
+          description: "P95 latency is {{ $value }}s"
 ```
 
 ## Troubleshooting
@@ -268,13 +230,13 @@ curl http://localhost:9090/api/v1/targets
 
 2. Проверьте логи OTel Collector:
 ```bash
-docker-compose logs otel-collector
+docker compose -f examples/docker-compose.yml logs otel-collector
 ```
 
 3. Проверьте что приложение отправляет метрики:
 ```bash
 # Должны быть логи "Exporting metrics"
-docker-compose logs otel-collector | grep metrics
+docker compose -f examples/docker-compose.yml logs otel-collector | grep metrics
 ```
 
 ### Трейсы не появляются в Jaeger
@@ -284,12 +246,11 @@ docker-compose logs otel-collector | grep metrics
 curl http://localhost:4317
 ```
 
-2. Проверьте конфигурацию в приложении:
-```go
-tracingCfg := tracing.Config{
-    OTLPEndpoint: "localhost:4317",  // Должно совпадать с портом коллектора
-    OTLPInsecure: true,
-}
+2. Проверьте конфигурацию в приложении: трейсинг по умолчанию выключен.
+```bash
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317  # порт коллектора
+OTEL_EXPORTER_OTLP_INSECURE=true
 ```
 
 ### Grafana не показывает данные
@@ -306,11 +267,8 @@ tracingCfg := tracing.Config{
 ## Остановка стека
 
 ```bash
-# Остановить все сервисы
-docker-compose down
-
-# Остановить с удалением volumes
-docker-compose down -v
+make obs-down   # остановить
+make obs-clean  # остановить и удалить volumes
 ```
 
 ## Структура файлов
@@ -320,7 +278,8 @@ observability/
 ├── README.md                              # Эта инструкция
 ├── logger/                                # Пакет логирования
 ├── tracing/                               # Пакет трассировки
-└── metrics/                               # Пакет метрик
+├── metrics/                               # Пакет метрик
+└── health/                                # Реестр health-проверок
 
 examples/
 ├── docker-compose.yml                     # Стек: otel-collector, jaeger, prometheus, grafana
@@ -333,7 +292,9 @@ examples/
         └── dashboards/
             ├── dashboards.yml             # Auto-provisioning дашбордов
             └── json/
-                └── http-server-metrics.json  # Готовый дашборд
+                ├── http-server-metrics.json  # HTTP-сервер
+                ├── postgres-connector.json   # connections/postgres
+                └── simple-metrics.json
 ```
 
 ## Best Practices

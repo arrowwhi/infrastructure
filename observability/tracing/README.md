@@ -1,272 +1,118 @@
-# Tracing
+# observability/tracing
 
-OpenTelemetry трассировка для Go приложений.
+Инициализация OpenTelemetry-трейсинга: экспорт в OTLP gRPC / OTLP HTTP (Jaeger, Tempo,
+OTel Collector) или в stdout для отладки, сэмплер `ParentBased(TraceIDRatioBased)`,
+пропагация W3C Trace Context + Baggage и HTTP-middleware для chi. `InitTracer` регистрирует
+провайдер глобально (`otel.SetTracerProvider`), поэтому все коннекторы библиотеки
+подхватывают его сами. **По умолчанию трейсинг выключен** (`OTEL_ENABLED=false`): без
+коллектора экспортёр только шумит ошибками в логах.
 
-## Возможности
+## Подключение
 
-- 🔍 Автоматическая трассировка HTTP запросов
-- 📊 Экспорт в Jaeger, Tempo, и другие OTLP-совместимые бэкенды
-- 🎯 Настраиваемый sampling
-- 📝 Stdout экспорт для разработки
-- 🔗 W3C Trace Context propagation
-- 🏷️ Семантические конвенции OpenTelemetry
-
-## Быстрый старт
-
-### 1. Инициализация
+```bash
+go get github.com/arrowwhi/infrastructure@latest
+```
 
 ```go
 import "github.com/arrowwhi/infrastructure/observability/tracing"
-
-cfg := tracing.Config{
-    Enabled:      true,        // по умолчанию false
-    Exporter:     "otlp-grpc", // или "otlp-http", "stdout" (только для отладки)
-    SamplingRate: 1.0,
-}
-
-tp, err := tracing.InitTracer(context.Background(), cfg, "my-service", "1.0.0", "development")
-if err != nil {
-    log.Fatal(err)
-}
-defer tp.Shutdown(context.Background())
 ```
 
-### 2. HTTP Middleware
+## Пример
 
 ```go
+package main
+
 import (
-    httpserver "github.com/arrowwhi/infrastructure/http/server"
-    "github.com/arrowwhi/infrastructure/observability/tracing"
+	"context"
+	"log"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
+	"github.com/arrowwhi/infrastructure/observability/tracing"
 )
 
-srv := httpserver.New(
-    cfg,
-    log,
-    tracing.Middleware("my-service"),
-)
-```
+func main() {
+	ctx := context.Background()
 
-### 3. Ручные spans
+	cfg := tracing.DefaultConfig()
+	cfg.Enabled = true
+	cfg.OTLPEndpoint = "localhost:4317"
+	cfg.SamplingRate = 0.1 // 10% корневых трейсов
 
-```go
-import (
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/codes"
-)
+	tp, err := tracing.InitTracer(ctx, cfg, "my-service", "1.0.0", "production")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 
-tracer := otel.Tracer("my-service")
+	r := chi.NewRouter()
+	r.Use(tracing.Middleware("my-service"))
+	r.Get("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		ctx, span := otel.Tracer("my-service").Start(r.Context(), "loadUser")
+		defer span.End()
 
-ctx, span := tracer.Start(r.Context(), "getUserFromDB",
-    trace.WithAttributes(
-        attribute.String("user.id", userID),
-        attribute.String("db.system", "postgresql"),
-    ),
-)
-defer span.End()
+		span.SetAttributes(attribute.String("user.id", "42"))
+		if err := loadUser(ctx); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "load user failed")
+			http.Error(w, "internal error", http.StatusInternalServerError)
 
-// Выполняем операцию
-user, err := db.GetUser(ctx, userID)
-if err != nil {
-    span.RecordError(err)
-    span.SetStatus(codes.Error, "failed to get user")
-    return err
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
 
-span.SetAttributes(
-    attribute.String("user.name", user.Name),
-)
-span.SetStatus(codes.Ok, "user retrieved")
+func loadUser(context.Context) error { return nil }
 ```
 
 ## Конфигурация
 
-### Переменные окружения
+Теги — полные имена переменных (без префикса).
 
-```bash
-OTEL_SERVICE_NAME=my-service
-OTEL_SERVICE_VERSION=1.0.0
-OTEL_ENVIRONMENT=production
-OTEL_ENABLED=true
-OTEL_EXPORTER=otlp-grpc
-OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
-OTEL_EXPORTER_OTLP_INSECURE=false
-OTEL_SAMPLING_RATE=0.1
-```
+| Переменная | По умолчанию | Смысл |
+|---|---|---|
+| `OTEL_ENABLED` | `false` | включить трейсинг; при `false` ставится noop-провайдер |
+| `OTEL_EXPORTER` | `otlp-grpc` | `otlp-grpc`, `otlp-http`, `stdout` (только отладка: печатает каждый спан) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | `host:port` коллектора (для otlp-http обычно `:4318`) |
+| `OTEL_EXPORTER_OTLP_INSECURE` | `true` | без TLS |
+| `OTEL_SAMPLING_RATE` | `1.0` | доля **корневых** трейсов, 0.0–1.0 |
+| `SHUTDOWN_TIMEOUT` | `5s` | не используется кодом; таймаут остановки задаёт контекст `tp.Shutdown(ctx)` |
 
-### Экспортеры
+Сэмплинг: если у входящего запроса уже есть родительский спан (`traceparent`), его решение
+сохраняется — трейс не рвётся между сервисами. `SamplingRate` применяется только к корням:
+`1.0` — dev, `0.1`–`0.01` — прод.
 
-#### Stdout (для разработки)
+## Трейсы
 
-```go
-cfg := tracing.Config{
-    Exporter: "stdout",
-}
-```
+- `tracing.Middleware` (otelhttp): спан на каждый HTTP-запрос, имя `METHOD /route/{pattern}`,
+  атрибуты `http.route` и `http.query` (сырой query string).
+- Спаны коннекторов: `connections/postgres` (при `DB_TRACING_ENABLED`), `connections/redis`,
+  `http/client`, `grpc/client`, `grpc/server`, `telegram/*` — все пишут в глобальный провайдер.
+- Ресурс: `service.name`, `service.version`, `deployment.environment`.
 
-Выводит spans в stdout в JSON формате.
+## Связь с другими пакетами
 
-#### OTLP gRPC (для Jaeger/Tempo)
+- `telegram/app` вызывает `InitTracer` сам из `app.Config.Tracing` и делает `Shutdown` в конце.
+- `http/server`: `httpserver.WithMiddlewares(tracing.Middleware(name))`.
+- `observability/logger` добавляет `trace_id`/`span_id` в каждую запись с контекстом спана.
 
-```go
-cfg := tracing.Config{
-    Exporter:     "otlp-grpc",
-    OTLPEndpoint: "jaeger:4317",
-    OTLPInsecure: false,
-}
-```
+## Подводные камни
 
-## Sampling
-
-Используется `ParentBased(TraceIDRatioBased(SamplingRate))`: если у входящего запроса
-есть родительский спан, его решение о сэмплировании сохраняется, а `SamplingRate`
-применяется только к корневым спанам. Так трейс не рвётся между сервисами.
-
-Sampling позволяет трассировать только часть запросов для снижения нагрузки:
-
-```go
-cfg := tracing.Config{
-    SamplingRate: 0.1, // 10% запросов
-}
-```
-
-- `1.0` - трассировать все запросы (для dev)
-- `0.1` - трассировать 10% запросов (для prod)
-- `0.01` - трассировать 1% запросов (для highload)
-
-## Лучшие практики
-
-### 1. Создавайте spans для важных операций
-
-```go
-// ✅ Good
-ctx, span := tracer.Start(ctx, "fetchUserData")
-defer span.End()
-
-user, err := db.GetUser(ctx, id)
-```
-
-### 2. Добавляйте полезные атрибуты
-
-```go
-// ✅ Good
-span.SetAttributes(
-    attribute.String("user.id", userID),
-    attribute.Int("result.count", len(results)),
-    attribute.String("cache.status", "hit"),
-)
-```
-
-### 3. Записывайте ошибки
-
-```go
-// ✅ Good
-if err != nil {
-    span.RecordError(err)
-    span.SetStatus(codes.Error, "operation failed")
-    return err
-}
-```
-
-### 4. Используйте события для важных моментов
-
-```go
-span.AddEvent("cache miss, fetching from DB")
-span.AddEvent("validation completed")
-```
-
-### 5. Передавайте контекст через границы
-
-```go
-// ✅ Good - контекст передается через HTTP headers
-req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-resp, err := client.Do(req)
-```
-
-## Jaeger UI
-
-После запуска Jaeger:
-
-1. Открыть http://localhost:16686
-2. Выбрать сервис в списке
-3. Нажать "Find Traces"
-4. Кликнуть на trace для просмотра деталей
-
-### Что смотреть в Jaeger:
-
-- **Waterfall** - визуализация вложенных операций
-- **Duration** - время выполнения каждого span
-- **Tags** - атрибуты spans
-- **Logs** - события и ошибки
-- **Process** - метаданные сервиса
-
-## Примеры
-
-См. `examples/http/main.go` для полного примера с:
-- Простыми spans
-- Вложенными spans
-- Параллельными операциями
-- Обработкой ошибок
-- Различными атрибутами
-
-## Интеграции
-
-### PostgreSQL
-
-```go
-ctx, span := tracer.Start(ctx, "db.query",
-    trace.WithAttributes(
-        semconv.DBSystemPostgreSQL,
-        semconv.DBStatementKey.String(query),
-    ),
-)
-defer span.End()
-
-rows, err := db.QueryContext(ctx, query)
-```
-
-### Redis
-
-```go
-ctx, span := tracer.Start(ctx, "redis.get",
-    trace.WithAttributes(
-        semconv.DBSystemRedis,
-        attribute.String("redis.key", key),
-    ),
-)
-defer span.End()
-
-val, err := rdb.Get(ctx, key).Result()
-```
-
-### gRPC
-
-```go
-// Автоматически с grpc-ecosystem/go-grpc-middleware/v2
-```
-
-## Troubleshooting
-
-### Spans не появляются в Jaeger
-
-1. Проверьте, что Jaeger запущен: `docker ps | grep jaeger`
-2. Проверьте endpoint: `OTEL_EXPORTER_OTLP_ENDPOINT`
-3. Проверьте, что `Enabled: true`
-4. Проверьте sampling rate
-
-### Слишком много spans
-
-Уменьшите sampling rate:
-
-```go
-cfg.SamplingRate = 0.01 // 1%
-```
-
-### Ошибки сертификатов
-
-Для локальной разработки:
-
-```go
-cfg.OTLPInsecure = true
-```
-
+- Контекст из `Start` нужно переприсваивать: `ctx, span := tracer.Start(ctx, ...)`. С `_, span :=`
+  дочерние спаны (запросы в базу) окажутся рядом, а не внутри.
+- `tp.Shutdown` сбрасывает буфер спанов; без него последние спаны при остановке теряются.
+- `http.query` пишется в спан как есть: не передавайте персональные данные и токены в query string.
+- Атрибут `http.route` ставится до маршрутизации: при подключении через `router.Use` на корневом
+  роутере (так делает `httpserver.WithMiddlewares`) шаблон ещё неизвестен и атрибута не будет;
+  имя спана при этом корректное (`GET /users/{id}`). Атрибут появится, если подключить middleware
+  через `r.Group(func(r chi.Router) { r.Use(tracing.Middleware(name)); ... })` или `r.With(...)`.
+- `SHUTDOWN_TIMEOUT` в `telegram/app` читается и `app.Config`, и `tracing.Config` (у трейсинга нет
+  префикса): одна переменная задаёт оба значения.

@@ -1,166 +1,156 @@
 # Infrastructure
 
-Библиотека общей инфраструктуры для Go проектов.
+Библиотека общей инфраструктуры для Go-сервисов: коннекторы к PostgreSQL и Redis, HTTP- и
+gRPC-серверы и клиенты, логи, метрики, трейсы и health-проверки на OpenTelemetry, каркас
+запуска сервиса и Telegram-бота. Все пакеты одинаково настраиваются из переменных окружения,
+пишут телеметрию в глобальные провайдеры OpenTelemetry и подключаются к общему реестру
+health-проверок.
 
-## Компоненты
+## Пакеты
 
-### HTTP Server (`http/server`)
+| Пакет | Назначение | Документация |
+|---|---|---|
+| `connections/postgres` | Пул pgx v5: транзакции через контекст, безопасные повторы, реплики, `Healthcheck`, OTel | [README](connections/postgres/README.md) |
+| `connections/postgres/migrate` | Миграции goose поверх `postgres.Pool` под advisory-блокировкой | [README](connections/postgres/migrate/README.md) |
+| `connections/redis` | Клиент go-redis v9 с redisotel, проверкой при старте и `Healthcheck` | [README](connections/redis/README.md) |
+| `grpc/server` | gRPC-сервер: recovery, логи, метрики, трейсы, `grpc.health.v1`, reflection, grpc-gateway | [README](grpc/server/README.md) |
+| `grpc/client` | `*grpc.ClientConn` с дедлайном по умолчанию, повторами, логами, метриками, трейсами, TLS | [README](grpc/client/README.md) |
+| `http/server` | HTTP-сервер на chi: graceful shutdown, TLS/HTTP3, `/healthz` `/ready`, Swagger, служебный порт | [README](http/server/README.md) |
+| `http/server/middlewares` | Request ID, real IP, access-лог | [README](http/server/middlewares/README.md) |
+| `http/client` | Fluent HTTP-клиент: повторы, (де)сериализация, `HTTPError`, mTLS, OTel | [README](http/client/README.md) |
+| `observability/logger` | Глобальный zerolog-логгер с `trace_id` и маскированием | [README](observability/logger/README.md) |
+| `observability/metrics` | OTel-метрики (Prometheus/OTLP), HTTP-middleware, gRPC-интерсепторы, `app_build_info` | [README](observability/metrics/README.md) |
+| `observability/tracing` | OTel-трейсинг (OTLP gRPC/HTTP, stdout), `ParentBased`-сэмплинг, HTTP-middleware | [README](observability/tracing/README.md) |
+| `observability/health` | Реестр проверок для `/ready`, gRPC health и метрик `health.check.*` | [README](observability/health/README.md) |
+| `telegram/app` | Запуск сервиса: конфиг, логи, метрики, трейсы, служебный порт, порядок остановки | [README](telegram/app/README.md) |
+| `telegram/bot` | Telegram-бот: маршруты, шаги диалога, воркеры, polling/webhook | [README](telegram/bot/README.md) |
+| `telegram/api` | Клиент Bot API с лимитами Telegram и повтором после 429 | [README](telegram/api/README.md) |
+| `telegram/state` | Хранилище шагов диалога: память, PostgreSQL, Redis | [README](telegram/state/README.md) |
+| `utils/masking` | Маскирование персональных данных в JSON, XML и `map[string]any` | [README](utils/masking/README.md) |
+| `utils/txmanager` | Общая транзакция PostgreSQL + конвейер Redis | [README](utils/txmanager/README.md) |
 
-Chi-based HTTP сервер с поддержкой:
-- Graceful shutdown
-- Middleware (RequestID, RealIP, Recoverer)
-- Трассировка OpenTelemetry
-- Настраиваемые таймауты
+Обзоры: [`telegram`](telegram/README.md) — как связаны четыре telegram-пакета;
+[`observability`](observability/README.md) — локальный стенд OTel Collector + Jaeger + Prometheus + Grafana.
 
-### Observability
+## Быстрый старт
 
-#### Logger (`observability/logger`)
-Zerolog-based логгер с маскировкой чувствительных данных. В каждую запись с контекстом
-автоматически попадают `trace_id` и `span_id` активного спана; для «сырых» zerolog-логгеров
-есть `logger.TraceHook`.
-
-#### Metrics (`observability/metrics`)
-OpenTelemetry метрики (Prometheus / OTLP): HTTP middleware (метка — шаблон маршрута),
-gRPC-интерсепторы для сервера и клиента, метрики рантайма Go, `app_build_info`.
-Все длительности — в секундах.
-
-#### Tracing (`observability/tracing`)
-OpenTelemetry трассировка с поддержкой:
-- OTLP gRPC и OTLP HTTP экспорт (Jaeger, Tempo и т.д.), stdout — для отладки
-- `ParentBased` sampling: решение вызывающего сервиса сохраняется
-- Автоматическая трассировка HTTP запросов
-- По умолчанию выключена (`OTEL_ENABLED=false`)
-
-#### Health (`observability/health`)
-Реестр проверок зависимостей с таймаутом на проверку и некритичными проверками.
-Один реестр отдаёт `/ready` в `http/server`, переключает `grpc.health.v1` в
-`grpc/server` (`WithHealthRegistry`) и публикует метрики `health.check.status`/`duration`.
-
-```go
-reg := health.New()
-reg.Register("postgres", pool.Healthcheck)
-reg.Register("redis", rdb.Healthcheck, health.NonCritical())
-_ = reg.RegisterMetrics(otel.Meter(serviceName))
-
-httpSrv, _ := httpserver.New(cfg.HTTP, httpserver.WithHealthRegistry(reg))
-grpcSrv, _ := grpcserver.New(cfg.GRPC, serviceName, grpcserver.WithHealthRegistry(reg, 10*time.Second))
+```bash
+go get github.com/arrowwhi/infrastructure@latest
 ```
 
-### Telegram (`telegram/...`)
-
-Скелет Telegram-бота — см. [`telegram/README.md`](telegram/README.md):
-- `telegram/app` — запуск сервиса: конфиг из env, логи, метрики, трейсинг, `/healthz` `/ready` `/metrics`, graceful shutdown;
-- `telegram/api` — рукописный клиент Bot API с лимитами Telegram и повтором после 429;
-- `telegram/bot` — команды, кнопки, шаги диалога, polling/webhook, порядок обработки внутри чата;
-- `telegram/state` — хранилище шагов диалога: память, PostgreSQL, Redis.
-
-Пример: [`examples/tgbot`](examples/tgbot/main.go).
-
-### Database
-
-#### PostgreSQL (`connections/postgres`)
-
-Коннектор поверх pgx v5 — см. [`connections/postgres/README.md`](connections/postgres/README.md):
-- трейсинг и метрики OpenTelemetry, **выключены по умолчанию** (при выключенной
-  инструментации трейсер не создаётся, накладных расходов нет)
-- транзакции через контекст: `InTx`, вложенность через `SAVEPOINT`, перезапуск при
-  конфликте сериализации
-- повторы только для запросов, гарантированно не дошедших до сервера
-- серверные таймауты, multi-host failover, mTLS, ротация секретов
-- `CopyFrom`, batch, генерик-хелперы `Get[T]`/`Select[T]`, query builder
-- advisory locks, LISTEN/NOTIFY, разделение чтения и записи, readiness-проба
-- миграции — опциональный подпакет `connections/postgres/migrate`
-
-- Redis (`connections/redis`) — go-redis v9 с redisotel (спаны и метрики команд и пула),
-  проверкой соединения при старте и `Healthcheck` для `observability/health`
-- Transaction Manager (`utils/txmanager`) — координация транзакции PostgreSQL
-  и конвейера Redis; для транзакций только по PostgreSQL используйте `postgres.Pool.InTx`
-
-### gRPC (`grpc/client`, `grpc/server`)
-
-- **Клиент** (`grpc/client`): TLS/mTLS, ретраи с backoff, keepalive, логирующий interceptor.
-- **Сервер** (`grpc/server`): recovery, логирование RPC, OTel-метрики (unary и stream),
-  трейсинг через otelgrpc, health-сервис `grpc.health.v1`, reflection, graceful shutdown с таймаутом
-  и опциональный HTTP/JSON-шлюз (grpc-gateway) с метриками и трейсами.
+Типичный `main`: конфиг из env, инфраструктура из `telegram/app`, коннекторы с health-проверками
+и закрытием при остановке, компоненты (бот, HTTP-/gRPC-сервер) под общим `Run`.
 
 ```go
-srv, err := grpcserver.New(cfg.GRPC, cfg.ServiceName,
-    grpcserver.WithServices(usersService), // RegisterGRPC + (опционально) RegisterGateway
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/arrowwhi/infrastructure/connections/postgres"
+	"github.com/arrowwhi/infrastructure/connections/redis"
+	"github.com/arrowwhi/infrastructure/observability/health"
+	"github.com/arrowwhi/infrastructure/telegram/app"
+	"github.com/arrowwhi/infrastructure/telegram/bot"
+	"github.com/arrowwhi/infrastructure/telegram/state"
 )
-if err != nil { ... }
-if err := srv.Run(ctx); err != nil { ... } // блокируется до отмены ctx
+
+// Config — вся конфигурация сервиса, читается из env (и .env) одним вызовом.
+type Config struct {
+	App      app.Config
+	Postgres postgres.Config
+	Redis    redis.Config
+	Telegram bot.Config
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	ctx := context.Background()
+
+	var cfg Config
+	if err := app.LoadConfig(&cfg); err != nil {
+		return err
+	}
+
+	// Логгер, трейсинг, метрики, health-реестр и служебный порт :9090 (/healthz, /ready, /metrics).
+	a, err := app.New(ctx, cfg.App)
+	if err != nil {
+		return err
+	}
+
+	pool, err := postgres.New(ctx, cfg.Postgres)
+	if err != nil {
+		return err
+	}
+	a.Health().Register("postgres", pool.Healthcheck)
+	a.OnShutdown(func(context.Context) error { pool.Close(); return nil })
+
+	rdb, err := redis.New(ctx, cfg.Redis)
+	if err != nil {
+		return err
+	}
+	a.Health().Register("redis", rdb.Healthcheck, health.NonCritical())
+	a.OnShutdown(func(context.Context) error { return rdb.Close() })
+
+	b, err := bot.New(cfg.Telegram, bot.WithStateStore(state.NewRedis(rdb.Client, "")))
+	if err != nil {
+		return err
+	}
+	a.Health().Register("telegram", b.Healthcheck)
+
+	b.Command("start", "Начать", func(c *bot.Context) error {
+		_, err := c.Reply("Привет!")
+		return err
+	})
+
+	// Блокируется до SIGINT/SIGTERM; затем: компоненты → OnShutdown (LIFO) → сброс телеметрии.
+	return a.Run(ctx, b)
+}
 ```
+
+```bash
+SERVICE_NAME=my-bot TELEGRAM_BOT_TOKEN=123:abc \
+DB_USER=svc DB_PASSWORD=secret DB_DATABASE=app \
+REDIS_ADDR=localhost:6379 go run .
+```
+
+HTTP- и gRPC-серверы подключаются так же — это компоненты с `Run(ctx) error`:
+`a.Run(ctx, b, httpSrv, grpcSrv)`, а общий реестр проверок передаётся им через
+`httpserver.WithHealthRegistry(a.Health())` и `grpcserver.WithHealthRegistry(a.Health(), interval)`.
+
+## Как пакеты работают вместе
+
+- **Конфиг.** У каждого пакета `Config` с тегами `env`/`env-default`; `app.LoadConfig` читает их
+  все одной структурой. Таблицы переменных — в README пакетов.
+- **Телеметрия.** `telegram/app` (или `tracing.InitTracer` + `metrics.InitMeterProvider`) регистрирует
+  провайдеры глобально; коннекторы, серверы и клиенты пишут в них без дополнительной настройки.
+  Трейсинг по умолчанию выключен (`OTEL_ENABLED=false`), длительности во всех метриках библиотеки —
+  в секундах (кроме метрик пула redisotel).
+- **Логи.** `observability/logger` добавляет `trace_id`/`span_id` в каждую запись с контекстом спана
+  и маскирует персональные данные.
+- **Health.** Один `health.Registry` отдаёт `/ready` (`telegram/app` или `http/server`), переключает
+  `grpc.health.v1` (`grpc/server`) и публикует `health.check.*`. Готовые проверки: `postgres.Pool.Healthcheck`,
+  `redis.Client.Healthcheck`, `bot.Bot.Healthcheck`.
+- **Остановка.** `app.OnShutdown` закрывает ресурсы в обратном порядке после остановки компонентов.
 
 ## Примеры
 
-### HTTP Server с observability
+| Каталог | Что показывает |
+|---|---|
+| [`examples/tgbot`](examples/tgbot/main.go) | бот на `telegram/app` + `telegram/bot` с диалогом и выбором хранилища состояний |
+| [`examples/http`](examples/http/main.go) | HTTP-сервер с трейсингом, метриками и PostgreSQL |
+| [`examples/docker-compose.yml`](examples/docker-compose.yml) | стенд OTel Collector, Jaeger, Prometheus, Grafana — см. [`observability`](observability/README.md) |
 
 ```bash
-# Запустить observability стек
-make obs-up
-
-# Запустить пример HTTP сервера
-cd examples/http
-go run .
-
-# Открыть UI
-open http://localhost:16686  # Jaeger (трейсинг)
-open http://localhost:9090   # Prometheus (метрики)
-open http://localhost:3000   # Grafana (визуализация)
-
-# Сделать запросы
-curl http://localhost:8080/health
-curl http://localhost:8080/api/users/123
-curl -X POST http://localhost:8080/api/orders
-curl http://localhost:8080/api/parallel
+make obs-up       # стенд наблюдаемости
+make run-server   # examples/http на :8080
+make load-test    # нагрузка, чтобы графики ожили
 ```
 
-### Конфигурация трассировки
-
-```go
-tracingCfg := tracing.Config{
-    Enabled:      true,
-    Exporter:     "otlp-grpc", // или "stdout"
-    OTLPEndpoint: "jaeger:4317",
-    OTLPInsecure: false,
-    SamplingRate: 0.1, // 10% запросов
-}
-
-tp, err := tracing.InitTracer(context.Background(), tracingCfg, "my-service", "1.0.0", "production")
-defer tp.Shutdown(context.Background())
-
-// Создать сервер с трассировкой
-srv := httpserver.New(
-    cfg,
-    log,
-    tracing.Middleware("my-service"),
-)
-```
-
-### Ручное создание spans
-
-```go
-tracer := otel.Tracer("my-service")
-
-ctx, span := tracer.Start(r.Context(), "operationName",
-    trace.WithAttributes(
-        attribute.String("key", "value"),
-    ),
-)
-defer span.End()
-
-// Добавить события
-span.AddEvent("something happened")
-
-// Записать ошибку
-if err != nil {
-    span.RecordError(err)
-    span.SetStatus(codes.Error, "operation failed")
-}
-```
-
-## Зависимости
-
-```bash
-go get github.com/arrowwhi/infrastructure
-```
+Jaeger — http://localhost:16686, Prometheus — http://localhost:9090, Grafana — http://localhost:3000 (admin/admin).
