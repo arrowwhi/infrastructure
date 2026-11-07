@@ -1,0 +1,185 @@
+openapi: 3.0.3
+info:
+  title: HTTP Server Example API
+  description: Example HTTP server with observability (tracing, metrics, logging)
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Development server
+
+tags:
+  - name: health
+    description: Health check endpoints
+  - name: users
+    description: User management
+  - name: orders
+    description: Order management
+  - name: examples
+    description: Example endpoints for testing tracing and metrics
+
+paths:
+  /health:
+    get:
+      tags:
+        - health
+      summary: Legacy health check
+      description: Returns basic health status with timestamp
+      operationId: legacyHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  time:
+                    type: string
+                    format: date-time
+                    example: "2025-11-09T10:30:00Z"
+
+  /api/users/{id}:
+    get:
+      tags:
+        - users
+      summary: Get user by ID
+      description: Retrieves user information by ID. Includes tracing and custom metrics.
+      operationId: getUserById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID
+          schema:
+            type: string
+            example: "12345"
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /api/orders:
+    post:
+      tags:
+        - orders
+      summary: Create new order
+      description: Creates a new order with validation, database save, and notification sending. Demonstrates nested spans and metrics.
+      operationId: createOrder
+      requestBody:
+        required: false
+        description: Order data (currently not validated in example)
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Order created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+
+  /api/error:
+    get:
+      tags:
+        - examples
+      summary: Simulate error
+      description: Endpoint that always returns an error. Used for testing error tracing and metrics.
+      operationId: simulateError
+      responses:
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Something went wrong
+
+  /api/external:
+    get:
+      tags:
+        - examples
+      summary: Call external service
+      description: Simulates calling an external HTTP service. Demonstrates external service tracing.
+      operationId: callExternalService
+      responses:
+        '200':
+          description: External data retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                    example: external data
+
+  /api/parallel:
+    get:
+      tags:
+        - examples
+      summary: Parallel operations
+      description: Executes multiple operations in parallel. Demonstrates parallel span tracking.
+      operationId: parallelOperations
+      responses:
+        '200':
+          description: All parallel tasks completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: all tasks completed
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "12345"
+        name:
+          type: string
+          example: John Doe
+        email:
+          type: string
+          format: email
+          example: john@example.com
+
+    Order:
+      type: object
+      properties:
+        order_id:
+          type: integer
+          example: 12345
+        status:
+          type: string
+          example: created
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Something went wrong
+

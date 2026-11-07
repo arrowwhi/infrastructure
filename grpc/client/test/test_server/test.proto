@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package test;
+
+import "google/protobuf/empty.proto";
+
+option go_package = "grpc/client/test/test_server/gen";
+
+service Test {
+  rpc Ping(google.protobuf.Empty) returns (PingResponse);
+  rpc SlowPing(google.protobuf.Empty) returns (PingResponse);
+  rpc FailingPing(google.protobuf.Empty) returns (PingResponse);
+}
+
+message PingResponse {
+  string message = 1;
+}

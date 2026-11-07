@@ -1,0 +1,55 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+  
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+
+exporters:
+  # Экспорт трейсов в Jaeger
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  
+  # Экспорт метрик в Prometheus
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+    const_labels:
+      environment: development
+  
+  # Логирование для отладки
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    # Pipeline для трейсов
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger, debug]
+    
+    # Pipeline для метрик
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus, debug]
+  
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888
+

@@ -1,0 +1,105 @@
+services:
+  # OpenTelemetry Collector - принимает трейсы и метрики
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.112.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml
+    ports:
+      # OTLP gRPC receiver
+      - "4317:4317"
+      # OTLP HTTP receiver
+      - "4318:4318"
+      # Prometheus metrics
+      - "8888:8888"
+      # Health check
+      - "13133:13133"
+    networks:
+      - observability-network
+    depends_on:
+      - jaeger
+      - prometheus
+
+  # Jaeger - для трейсов
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      # Jaeger UI
+      - "16686:16686"
+      # Jaeger collector
+      - "14268:14268"
+      # Health check
+      - "14269:14269"
+    networks:
+      - observability-network
+
+  # Prometheus - для метрик
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - observability-network
+
+  # Grafana - для визуализации метрик и трейсов
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - observability-network
+    depends_on:
+      - prometheus
+      - jaeger
+
+  # PostgreSQL - для примера работы connections/postgres
+  postgres:
+    image: postgres:17-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=example
+      - POSTGRES_PASSWORD=example
+      - POSTGRES_DB=example
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U example -d example"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - observability-network
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  observability-network:
+    driver: bridge
+

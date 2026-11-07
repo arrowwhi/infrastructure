@@ -1,0 +1,323 @@
+version: "2"
+
+run:
+  timeout: 1m
+  tests: true
+  allow-parallel-runners: true
+  allow-serial-runners: true
+
+output:
+  formats:
+    text:
+      path: stdout
+      colors: true
+  show-stats: false
+
+issues:
+  max-same-issues: 25
+  # new-from-rev: HEAD
+  whole-files: false
+
+severity:
+  default: error
+  rules:
+    - linters:
+        - dupl
+      severity: warning
+
+linters:
+  default: none
+  enable:
+    ## Обработка ошибок и исключений
+    - errcheck
+    - errname
+    - nilerr
+    - nolintlint
+
+    ## Качество кода и стиль
+    - gocritic
+    - revive
+    - funlen
+    - whitespace
+    - dogsled
+    - nlreturn
+    - decorder
+
+    ## Безопасность
+    - gosec
+    - asciicheck
+    - bidichk
+    - noctx
+    - sqlclosecheck
+    - depguard
+
+    ## Производительность
+    - prealloc
+    - perfsprint
+    - ineffassign
+    - wastedassign
+
+    ## Тестирование
+    - testifylint
+
+    ## Форматирование
+    - lll
+
+    ## Документация/комментарии
+    - misspell
+    # - godot # временно off
+    - godox
+
+    ## Сложность кода
+    - gocognit
+    - nestif
+
+    ## Типы и утверждения
+    - forcetypeassert
+    - unparam
+
+    ## Дублирование и константы
+    - dupl
+    - goconst
+    - mnd
+
+    ## Общий анализ кода
+    - govet
+    - staticcheck
+    - unused
+    - exhaustive
+
+    ## Специфические проверки
+    - bodyclose
+    - exptostd
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - errname
+          - nilerr
+          - nolintlint
+          - gocritic
+          - revive
+          - funlen
+          - whitespace
+          - dogsled
+          - nlreturn
+          - decorder
+          - gosec
+          - asciicheck
+          - bidichk
+          - noctx
+          - sqlclosecheck
+          - depguard
+          - prealloc
+          - ineffassign
+          - goconst
+          - nestif
+          - forcetypeassert
+          - unparam
+          - dupl
+          - mnd
+          - govet
+          - staticcheck
+          - unused
+          - bodyclose
+          - exptostd
+      - path-except: _test\.go
+        linters:
+          - lll
+          - misspell
+          - wastedassign
+          - testifylint
+          - perfsprint
+  settings:
+    ## Обработка ошибок и исключений
+    errcheck:
+      check-type-assertions: true
+      disable-default-exclusions: true
+
+    nolintlint:
+      allow-unused: false
+      allow-no-explanation: []
+      require-explanation: false
+      require-specific: true
+
+    ## Качество кода и стиль
+    gocritic:
+      disable-all: true
+      enabled-checks:
+        - argOrder
+        - badCond
+        - badLock
+        - appendAssign
+        - appendCombine
+        - assignOp
+        - badCall
+        - badRegexp
+        - badSyncOnceFunc
+        - boolExprSimplify
+        - builtinShadow
+        - captLocal
+        - caseOrder
+        - commentFormatting
+        - commentedOutCode
+        - defaultCaseOrder
+        - deferInLoop
+        - deferUnlambda
+        - deprecatedComment
+        - docStub
+        - dupArg
+        - dupBranchBody
+        - dupCase
+        - dupSubExpr
+        - elseif
+        - emptyDecl
+        - emptyFallthrough
+        - emptyStringTest
+        - equalFold
+        - exposedSyncMutex
+        - hexLiteral
+        - httpNoBody
+        - ifElseChain
+        - importShadow
+        - indexAlloc
+        - initClause
+        - methodExprCall
+        - nestingReduce
+        - newDeref
+        - nilValReturn
+        - offBy1
+        - paramTypeCombine
+        - preferStringWriter
+        - rangeExprCopy
+        - singleCaseSwitch
+        - sliceClear
+        - typeSwitchVar
+        - typeUnparen
+        - uncheckedInlineErr
+        - underef
+        - unlabelStmt
+        - unlambda
+        - unnecessaryBlock
+        - unnecessaryDefer
+        - unslice
+        - valSwap
+        - wrapperFunc
+        - yodaStyleExpr
+        - unnamedResult
+
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: function-result-limit
+          severity: error
+          disabled: false
+          arguments: [3]
+          # алиасы импортов пишем в snake_case, чтобы они не путались с переменными
+        - name: import-alias-naming
+          severity: error
+          disabled: false
+          arguments:
+            - allowRegex: "^[a-z_]+$"
+
+    staticcheck:
+      checks:
+        - all
+        - -ST1003
+
+    funlen:
+      lines: 120
+      statements: -1
+      ignore-comments: true
+
+    decorder:
+      dec-order:
+        - const
+        - type
+        - var
+        - func
+
+    nlreturn:
+      block-size: 4
+
+    ## Безопасность
+    gosec:
+      excludes: []
+      severity: low
+      confidence: low
+
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          allow: [$all]
+
+    ## Производительность
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: true
+
+    perfsprint:
+      int-conversion: true
+      err-error: true
+      errorf: true
+      sprintf1: true
+      strconcat: true
+
+    ## Форматирование
+    lll:
+      line-length: 150
+      tab-width: 4
+
+    ## Сложность кода
+    gocognit:
+      min-complexity: 20
+
+    nestif:
+      min-complexity: 3
+
+    ## Дублирование и константы
+    dupl:
+      threshold: 150
+
+    mnd:
+      checks:
+        - condition
+        - return
+        - assign
+
+    ## Общий анализ кода
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - composites
+
+    unused:
+      field-writes-are-uses: true
+      post-statements-are-reads: false
+      exported-fields-are-used: true
+      parameters-are-used: true
+      local-variables-are-used: true
+      generated-is-used: true
+
+formatters:
+  enable:
+    - gofmt
+    - gci
+  settings:
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: "interface{}"
+          replacement: "any"
+
+    # команда для фикса импортов - go run github.com/daixiang0/gci write -s alias -s standard -s default -s "Prefix(github.com/arrowwhi)" .
+    gci:
+      sections:
+        - alias
+        - standard
+        - default
+        - prefix(github.com/arrowwhi)

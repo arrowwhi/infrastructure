@@ -1,0 +1,28 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: 'development'
+
+scrape_configs:
+  # Scrape метрики из OpenTelemetry Collector
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8889']
+        labels:
+          service: 'otel-collector'
+  
+  # Scrape собственные метрики Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+  
+  # Scrape метрики из приложения (если используется прямой Prometheus exporter)
+  - job_name: 'http-server-example'
+    static_configs:
+      - targets: ['host.docker.internal:9091']
+        labels:
+          service: 'http-server-example'
+    metrics_path: /metrics
