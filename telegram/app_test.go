@@ -1,4 +1,4 @@
-package app
+package telegram
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testConfig() Config {
-	var cfg Config
+func testConfig() AppConfig {
+	var cfg AppConfig
 
 	cfg.ServiceName = "test"
 	cfg.ShutdownTimeout = time.Second
@@ -25,7 +25,7 @@ func testConfig() Config {
 }
 
 func TestRun_ShutdownOrder(t *testing.T) {
-	a, err := New(context.Background(), testConfig())
+	a, err := NewApp(context.Background(), testConfig())
 	require.NoError(t, err)
 
 	var order []string
@@ -61,7 +61,7 @@ func TestRun_ShutdownOrder(t *testing.T) {
 }
 
 func TestRun_ComponentErrorStopsOthers(t *testing.T) {
-	a, err := New(context.Background(), testConfig())
+	a, err := NewApp(context.Background(), testConfig())
 	require.NoError(t, err)
 
 	boom := errors.New("boom")
@@ -77,7 +77,7 @@ func TestRun_ComponentErrorStopsOthers(t *testing.T) {
 }
 
 func TestAdminHandler(t *testing.T) {
-	a, err := New(context.Background(), testConfig())
+	a, err := NewApp(context.Background(), testConfig())
 	require.NoError(t, err)
 
 	a.Health().Register("db", func(context.Context) error { return errors.New("down") })
@@ -97,7 +97,7 @@ func TestLoadConfig(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "warn")
 
 	var cfg struct {
-		App Config
+		App AppConfig
 	}
 
 	require.NoError(t, LoadConfig(&cfg))
@@ -112,6 +112,6 @@ func TestLoadConfig_RequiresServiceName(t *testing.T) {
 	t.Setenv("SERVICE_NAME", "")
 	require.NoError(t, os.Unsetenv("SERVICE_NAME")) // t.Setenv восстановит значение после теста
 
-	var cfg Config
+	var cfg AppConfig
 	require.Error(t, LoadConfig(&cfg))
 }

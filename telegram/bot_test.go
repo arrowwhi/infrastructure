@@ -1,4 +1,4 @@
-package bot
+package telegram
 
 import (
 	"context"
@@ -14,16 +14,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/arrowwhi/infrastructure/telegram/api"
 )
 
-const testToken = "1:test"
+const botTestToken = "1:test"
 
 // fakeTelegram — заглушка Bot API: запоминает вызовы и отдаёт очередь обновлений getUpdates.
 type fakeTelegram struct {
 	srv     *httptest.Server
-	updates chan []api.Update
+	updates chan []Update
 	calls   []call
 	mu      sync.Mutex
 }
@@ -36,7 +34,7 @@ type call struct {
 func newFakeTelegram(t *testing.T) *fakeTelegram {
 	t.Helper()
 
-	f := &fakeTelegram{updates: make(chan []api.Update, 10)}
+	f := &fakeTelegram{updates: make(chan []Update, 10)}
 
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
@@ -54,9 +52,9 @@ func newFakeTelegram(t *testing.T) *fakeTelegram {
 
 		switch method {
 		case "getMe":
-			result = api.User{ID: 1, IsBot: true, FirstName: "Test", Username: "test_bot"}
+			result = User{ID: 1, IsBot: true, FirstName: "Test", Username: "test_bot"}
 		case "sendMessage":
-			result = api.Message{MessageID: 1, Chat: api.Chat{ID: 1, Type: "private"}}
+			result = Message{MessageID: 1, Chat: Chat{ID: 1, Type: "private"}}
 		case "getUpdates":
 			select {
 			case u := <-f.updates:
@@ -64,7 +62,7 @@ func newFakeTelegram(t *testing.T) *fakeTelegram {
 			case <-r.Context().Done():
 				return
 			case <-time.After(50 * time.Millisecond):
-				result = []api.Update{}
+				result = []Update{}
 			}
 		}
 
@@ -94,7 +92,7 @@ func (f *fakeTelegram) sent(method string) []map[string]any {
 func newTestBot(t *testing.T, f *fakeTelegram, opts ...Option) *Bot {
 	t.Helper()
 
-	cfg := DefaultConfig(testToken)
+	cfg := DefaultConfig(botTestToken)
 	cfg.API.BaseURL = f.srv.URL
 	cfg.API.ChatInterval = 0
 	cfg.PollTimeout = time.Second
@@ -108,26 +106,26 @@ func newTestBot(t *testing.T, f *fakeTelegram, opts ...Option) *Bot {
 	return b
 }
 
-func message(chatID int64, text string) api.Update {
-	return api.Update{
+func message(chatID int64, text string) Update {
+	return Update{
 		UpdateID: chatID,
-		Message: &api.Message{
+		Message: &Message{
 			MessageID: 1,
-			From:      &api.User{ID: chatID},
-			Chat:      api.Chat{ID: chatID, Type: "private"},
+			From:      &User{ID: chatID},
+			Chat:      Chat{ID: chatID, Type: "private"},
 			Text:      text,
 		},
 	}
 }
 
-func callback(chatID int64, data string) api.Update {
-	return api.Update{
+func callback(chatID int64, data string) Update {
+	return Update{
 		UpdateID: chatID,
-		CallbackQuery: &api.CallbackQuery{
+		CallbackQuery: &CallbackQuery{
 			ID:      "cb1",
-			From:    api.User{ID: chatID},
+			From:    User{ID: chatID},
 			Data:    data,
-			Message: &api.Message{MessageID: 5, Chat: api.Chat{ID: chatID, Type: "private"}},
+			Message: &Message{MessageID: 5, Chat: Chat{ID: chatID, Type: "private"}},
 		},
 	}
 }
@@ -296,7 +294,7 @@ func TestDispatcherKeepsPerChatOrder(t *testing.T) {
 		got = map[int64][]int64{}
 	)
 
-	d := newDispatcher(4, 8, func(u api.Update) {
+	d := newDispatcher(4, 8, func(u Update) {
 		time.Sleep(time.Millisecond)
 
 		mu.Lock()
@@ -338,7 +336,7 @@ func TestPollingEndToEnd(t *testing.T) {
 		return nil
 	})
 
-	f.updates <- []api.Update{message(1, "/start"), message(2, "/start")}
+	f.updates <- []Update{message(1, "/start"), message(2, "/start")}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

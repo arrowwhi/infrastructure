@@ -88,7 +88,7 @@ DROP TABLE users;
 ## Связь с другими пакетами
 
 - Требует `*postgres.Pool` из [`connections/postgres`](../README.md); второй набор соединений не создаётся.
-- Для DDL таблицы состояний бота используйте `state.PostgresSchema(table)` из `telegram/state` в
+- Для DDL таблицы состояний бота используйте `telegram.PostgresStateSchema(table)` из `telegram` в
   своей миграции.
 
 ## Подводные камни

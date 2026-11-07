@@ -1,4 +1,4 @@
-package state
+package telegram
 
 import (
 	"context"
@@ -27,12 +27,12 @@ func testStore(t *testing.T, store Store, ttl time.Duration, expire func()) {
 	t.Helper()
 
 	ctx := context.Background()
-	key := Key{ChatID: 100, UserID: 7}
+	key := StateKey{ChatID: 100, UserID: 7}
 
 	_, err := store.Get(ctx, key)
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, ErrStateNotFound)
 
-	s, err := New("awaiting_rating", pick{ID: 42, Title: "Дюна"})
+	s, err := NewState("awaiting_rating", pick{ID: 42, Title: "Дюна"})
 	require.NoError(t, err)
 	require.NoError(t, store.Set(ctx, key, s, 0))
 
@@ -45,8 +45,8 @@ func testStore(t *testing.T, store Store, ttl time.Duration, expire func()) {
 	assert.Equal(t, pick{ID: 42, Title: "Дюна"}, p)
 
 	// Другой участник того же чата — отдельное состояние.
-	_, err = store.Get(ctx, Key{ChatID: 100, UserID: 8})
-	require.ErrorIs(t, err, ErrNotFound)
+	_, err = store.Get(ctx, StateKey{ChatID: 100, UserID: 8})
+	require.ErrorIs(t, err, ErrStateNotFound)
 
 	// Перезапись без данных.
 	require.NoError(t, store.Set(ctx, key, State{Name: "idle"}, 0))
@@ -57,7 +57,7 @@ func testStore(t *testing.T, store Store, ttl time.Duration, expire func()) {
 
 	require.NoError(t, store.Delete(ctx, key))
 	_, err = store.Get(ctx, key)
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, ErrStateNotFound)
 
 	// Истечение по TTL.
 	require.NoError(t, store.Set(ctx, key, State{Name: "temp"}, ttl))
@@ -67,11 +67,11 @@ func testStore(t *testing.T, store Store, ttl time.Duration, expire func()) {
 	expire()
 
 	_, err = store.Get(ctx, key)
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, ErrStateNotFound)
 }
 
 func TestMemory(t *testing.T) {
-	m := NewMemory()
+	m := NewMemoryStore()
 	now := time.Now()
 	m.now = func() time.Time { return now }
 
@@ -84,11 +84,11 @@ func TestRedis(t *testing.T) {
 
 	t.Cleanup(func() { _ = client.Close() })
 
-	testStore(t, NewRedis(client, ""), time.Minute, func() { srv.FastForward(2 * time.Minute) })
+	testStore(t, NewRedisStore(client, ""), time.Minute, func() { srv.FastForward(2 * time.Minute) })
 
 	keys := srv.Keys()
 	for _, k := range keys {
-		assert.Contains(t, k, DefaultRedisPrefix)
+		assert.Contains(t, k, DefaultRedisStatePrefix)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestPostgres(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
-	store, err := NewPostgres(pool, "")
+	store, err := NewPostgresStore(pool, "")
 	require.NoError(t, err)
 	require.NoError(t, store.EnsureSchema(ctx))
 	require.NoError(t, store.EnsureSchema(ctx), "EnsureSchema идемпотентна")
@@ -137,6 +137,6 @@ func TestPostgres(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n, "истёкшая запись удаляется уборкой")
 
-	_, err = NewPostgres(pool, "bad; DROP TABLE x")
+	_, err = NewPostgresStore(pool, "bad; DROP TABLE x")
 	require.Error(t, err)
 }

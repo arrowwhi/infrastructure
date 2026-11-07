@@ -108,8 +108,8 @@ keepalive), `WithGatewayMuxOptions`, `WithGatewayMiddlewares` (CORS, автор�
 
 - `observability/health`: `WithHealthRegistry(reg, interval)` опрашивает реестр каждые `interval`
   (≤ 0 — 10 с) и переводит весь сервер в `NOT_SERVING` при падении критичной проверки.
-  Тот же реестр отдаёт `/ready` в `http/server` или `telegram/app` и метрики `health.check.*`.
-- `telegram/app`: `*Server` реализует `app.Component` — `a.Run(ctx, srv)`; реестр — `a.Health()`.
+  Тот же реестр отдаёт `/ready` в `http/server` или `telegram` и метрики `health.check.*`.
+- `telegram`: `*Server` реализует `telegram.Component` — `a.Run(ctx, srv)`; реестр — `a.Health()`.
 - `grpc/client` — парный клиент; см. там про keepalive.
 
 ## Подводные камни

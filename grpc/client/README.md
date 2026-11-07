@@ -114,7 +114,7 @@ func main() {
 ## Связь с другими пакетами
 
 - Метрики и трейсы пишутся в глобальные провайдеры: инициализируйте `observability/metrics` и
-  `observability/tracing` (или `telegram/app`) до создания клиента.
+  `observability/tracing` (или `telegram`) до создания клиента.
 - Логгер берите из `observability/logger`: `l := logger.With().Logger()`; `nil` — без логов.
 - Закрытие соединения при остановке: `a.OnShutdown(func(context.Context) error { return conn.Close() })`.
 

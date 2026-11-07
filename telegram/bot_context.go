@@ -1,12 +1,9 @@
-package bot
+package telegram
 
 import (
 	"context"
 	"errors"
 	"strings"
-
-	"github.com/arrowwhi/infrastructure/telegram/api"
-	"github.com/arrowwhi/infrastructure/telegram/state"
 )
 
 // Context — обновление и всё, что нужно обработчику, чтобы на него ответить.
@@ -15,12 +12,12 @@ type Context struct {
 	context.Context //nolint:containedctx // Context — это и есть контекст обработки обновления
 
 	bot      *Bot
-	Update   api.Update
+	Update   Update
 	route    string
 	command  string
 	args     string
 	cbPrefix string
-	st       state.State
+	st       State
 	stLoaded bool
 	hasState bool
 	answered bool
@@ -30,13 +27,13 @@ type Context struct {
 func (c *Context) Bot() *Bot { return c.bot }
 
 // API возвращает клиент Bot API — для вызовов, которых нет среди хелперов.
-func (c *Context) API() *api.Client { return c.bot.api }
+func (c *Context) API() *Client { return c.bot.api }
 
 // Route возвращает имя сработавшего маршрута (например, "command:start").
 func (c *Context) Route() string { return c.route }
 
 // Message возвращает сообщение (для нажатия кнопки — сообщение с кнопкой).
-func (c *Context) Message() *api.Message {
+func (c *Context) Message() *Message {
 	switch {
 	case c.Update.Message != nil:
 		return c.Update.Message
@@ -48,7 +45,7 @@ func (c *Context) Message() *api.Message {
 }
 
 // Callback возвращает нажатие кнопки или nil.
-func (c *Context) Callback() *api.CallbackQuery { return c.Update.CallbackQuery }
+func (c *Context) Callback() *CallbackQuery { return c.Update.CallbackQuery }
 
 // ChatID возвращает id чата (0, если чата нет).
 func (c *Context) ChatID() int64 {
@@ -69,7 +66,7 @@ func (c *Context) UserID() int64 {
 }
 
 // User возвращает автора обновления.
-func (c *Context) User() *api.User { return c.Update.From() }
+func (c *Context) User() *User { return c.Update.From() }
 
 // Text возвращает текст сообщения (или подпись к фото).
 func (c *Context) Text() string {
@@ -114,8 +111,8 @@ func (c *Context) CallbackArgs() []string {
 }
 
 // Reply отправляет текст в текущий чат.
-func (c *Context) Reply(text string, opts ...SendOption) (api.Message, error) {
-	req := api.SendMessageRequest{ChatID: c.ChatID(), Text: text}
+func (c *Context) Reply(text string, opts ...SendOption) (Message, error) {
+	req := SendMessageRequest{ChatID: c.ChatID(), Text: text}
 	for _, opt := range opts {
 		opt(&req)
 	}
@@ -125,20 +122,20 @@ func (c *Context) Reply(text string, opts ...SendOption) (api.Message, error) {
 
 // Edit меняет текст сообщения с нажатой кнопкой (для callback) и его клавиатуру.
 // Ошибку «message is not modified» не возвращает.
-func (c *Context) Edit(text string, markup *api.InlineKeyboardMarkup, parseMode string) error {
+func (c *Context) Edit(text string, markup *InlineKeyboardMarkup, parseMode string) error {
 	m := c.Message()
 	if m == nil {
 		return errors.New("bot: no message to edit")
 	}
 
-	err := c.bot.api.EditMessageText(c, api.EditMessageTextRequest{
+	err := c.bot.api.EditMessageText(c, EditMessageTextRequest{
 		ChatID:      m.Chat.ID,
 		MessageID:   m.MessageID,
 		Text:        text,
 		ParseMode:   parseMode,
 		ReplyMarkup: markup,
 	})
-	if api.IsMessageNotModified(err) {
+	if IsMessageNotModified(err) {
 		return nil
 	}
 
@@ -156,7 +153,7 @@ func (c *Context) Answer(text string, alert bool) error {
 
 	c.answered = true
 
-	return c.bot.api.AnswerCallbackQuery(c, api.AnswerCallbackQueryRequest{
+	return c.bot.api.AnswerCallbackQuery(c, AnswerCallbackQueryRequest{
 		CallbackQueryID: cb.ID,
 		Text:            text,
 		ShowAlert:       alert,
@@ -164,12 +161,12 @@ func (c *Context) Answer(text string, alert bool) error {
 }
 
 // StateKey возвращает ключ состояния текущего пользователя в текущем чате.
-func (c *Context) StateKey() state.Key {
-	return state.Key{ChatID: c.ChatID(), UserID: c.UserID()}
+func (c *Context) StateKey() StateKey {
+	return StateKey{ChatID: c.ChatID(), UserID: c.UserID()}
 }
 
 // State возвращает текущее состояние диалога. ok == false — состояния нет.
-func (c *Context) State() (s state.State, ok bool, err error) {
+func (c *Context) State() (s State, ok bool, err error) {
 	if c.stLoaded {
 		return c.st, c.hasState, nil
 	}
@@ -177,12 +174,12 @@ func (c *Context) State() (s state.State, ok bool, err error) {
 	s, err = c.bot.store.Get(c, c.StateKey())
 
 	switch {
-	case errors.Is(err, state.ErrNotFound):
+	case errors.Is(err, ErrStateNotFound):
 		c.stLoaded, c.hasState = true, false
 
-		return state.State{}, false, nil
+		return State{}, false, nil
 	case err != nil:
-		return state.State{}, false, err
+		return State{}, false, err
 	}
 
 	c.st, c.stLoaded, c.hasState = s, true, true
@@ -192,7 +189,7 @@ func (c *Context) State() (s state.State, ok bool, err error) {
 
 // SetState переводит диалог в шаг name с данными data (nil — без данных) на Config.StateTTL.
 func (c *Context) SetState(name string, data any) error {
-	s, err := state.New(name, data)
+	s, err := NewState(name, data)
 	if err != nil {
 		return err
 	}
@@ -212,32 +209,32 @@ func (c *Context) ClearState() error {
 		return err
 	}
 
-	c.st, c.stLoaded, c.hasState = state.State{}, true, false
+	c.st, c.stLoaded, c.hasState = State{}, true, false
 
 	return nil
 }
 
 // SendOption настраивает отправляемое сообщение.
-type SendOption func(*api.SendMessageRequest)
+type SendOption func(*SendMessageRequest)
 
 // WithKeyboard прикрепляет клавиатуру.
-func WithKeyboard(markup api.ReplyMarkup) SendOption {
-	return func(r *api.SendMessageRequest) { r.ReplyMarkup = markup }
+func WithKeyboard(markup ReplyMarkup) SendOption {
+	return func(r *SendMessageRequest) { r.ReplyMarkup = markup }
 }
 
-// WithParseMode задаёт разметку (api.ParseModeHTML, api.ParseModeMarkdownV2).
+// WithParseMode задаёт разметку (ParseModeHTML, ParseModeMarkdownV2).
 func WithParseMode(mode string) SendOption {
-	return func(r *api.SendMessageRequest) { r.ParseMode = mode }
+	return func(r *SendMessageRequest) { r.ParseMode = mode }
 }
 
 // WithoutPreview отключает превью ссылок.
 func WithoutPreview() SendOption {
-	return func(r *api.SendMessageRequest) {
-		r.LinkPreviewOptions = &api.LinkPreviewOptions{IsDisabled: true}
+	return func(r *SendMessageRequest) {
+		r.LinkPreviewOptions = &LinkPreviewOptions{IsDisabled: true}
 	}
 }
 
 // Silent отправляет без звука.
 func Silent() SendOption {
-	return func(r *api.SendMessageRequest) { r.DisableNotify = true }
+	return func(r *SendMessageRequest) { r.DisableNotify = true }
 }

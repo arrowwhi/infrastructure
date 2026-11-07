@@ -1,4 +1,4 @@
-package bot
+package telegram
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/arrowwhi/infrastructure/observability/logger"
-	"github.com/arrowwhi/infrastructure/telegram/api"
 )
 
 const (
@@ -30,7 +29,7 @@ func (b *Bot) runPolling(ctx context.Context) error {
 	inConflict := false
 
 	for ctx.Err() == nil {
-		updates, err := b.api.GetUpdates(ctx, api.GetUpdatesRequest{
+		updates, err := b.api.GetUpdates(ctx, GetUpdatesRequest{
 			Offset:         offset,
 			Timeout:        int(b.cfg.PollTimeout.Seconds()),
 			AllowedUpdates: allowedUpdates,
@@ -42,7 +41,7 @@ func (b *Bot) runPolling(ctx context.Context) error {
 
 			var wait time.Duration
 
-			if api.IsCode(err, http.StatusConflict) {
+			if IsCode(err, http.StatusConflict) {
 				// Старый экземпляр ещё опрашивает Telegram — штатно при деплое, пишем один раз.
 				if !inConflict {
 					logger.Info(ctx).Msg("Another bot instance is polling, waiting for it to stop")

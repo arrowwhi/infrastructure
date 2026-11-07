@@ -95,14 +95,14 @@ func main() {
 
 ## Связь с другими пакетами
 
-- `telegram/app` создаёт реестр сам: `a.Health().Register(...)`, отдаёт `/healthz` и `/ready`
+- `telegram` создаёт реестр сам: `a.Health().Register(...)`, отдаёт `/healthz` и `/ready`
   на служебном порту и регистрирует метрики.
 - `http/server` отдаёт `/healthz` и `/ready` на основном порту; общий реестр передаётся
   через `httpserver.WithHealthRegistry(reg)`, проверки добавляются `srv.AddHealthCheckFunc(...)`
   или `srv.Health().Register(...)`.
 - `grpc/server` с `grpcserver.WithHealthRegistry(reg, interval)` опрашивает реестр и переводит
   `grpc.health.v1` в `NOT_SERVING` при падении критичной проверки.
-- Готовые проверки: `postgres.Pool.Healthcheck`, `redis.Client.Healthcheck`, `bot.Bot.Healthcheck`,
+- Готовые проверки: `postgres.Pool.Healthcheck`, `redis.Client.Healthcheck`, `telegram.Bot.Healthcheck`,
   `api.Client.Healthcheck` — все имеют сигнатуру `health.CheckFunc`.
 
 ## Подводные камни

@@ -1,4 +1,4 @@
-package api
+package telegram
 
 import "encoding/json"
 

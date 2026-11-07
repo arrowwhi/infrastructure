@@ -100,7 +100,7 @@ func loadUser(context.Context) error { return nil }
 
 ## Связь с другими пакетами
 
-- `telegram/app` вызывает `InitTracer` сам из `app.Config.Tracing` и делает `Shutdown` в конце.
+- `telegram` вызывает `InitTracer` сам из `telegram.AppConfig.Tracing` и делает `Shutdown` в конце.
 - `http/server`: `httpserver.WithMiddlewares(tracing.Middleware(name))`.
 - `observability/logger` добавляет `trace_id`/`span_id` в каждую запись с контекстом спана.
 
@@ -114,5 +114,5 @@ func loadUser(context.Context) error { return nil }
   роутере (так делает `httpserver.WithMiddlewares`) шаблон ещё неизвестен и атрибута не будет;
   имя спана при этом корректное (`GET /users/{id}`). Атрибут появится, если подключить middleware
   через `r.Group(func(r chi.Router) { r.Use(tracing.Middleware(name)); ... })` или `r.With(...)`.
-- `SHUTDOWN_TIMEOUT` в `telegram/app` читается и `app.Config`, и `tracing.Config` (у трейсинга нет
+- `SHUTDOWN_TIMEOUT` в `telegram` читается и `telegram.AppConfig`, и `tracing.Config` (у трейсинга нет
   префикса): одна переменная задаёт оба значения.

@@ -69,9 +69,9 @@ srv := grpc.NewServer(
 
 ## Конфигурация
 
-Префикс переменных задаёт тот, кто встраивает `Config`; в `telegram/app` это `METRICS_`.
+Префикс переменных задаёт тот, кто встраивает `Config`; в `telegram` это `METRICS_`.
 
-| Переменная (`telegram/app`) | По умолчанию | Смысл |
+| Переменная (`telegram`) | По умолчанию | Смысл |
 |---|---|---|
 | `METRICS_ENABLED` | `true` | `false` — провайдер не создаётся, `InitMeterProvider` возвращает `nil, nil` |
 | `METRICS_EXPORTER` | `prometheus` | `prometheus`, `otlp-grpc`, `otlp-http` |
@@ -106,7 +106,7 @@ gRPC, метки `grpc.method`, `grpc.status`:
 
 ## Связь с другими пакетами
 
-- `telegram/app` вызывает `InitMeterProvider` сам и отдаёт `/metrics` на служебном порту.
+- `telegram` вызывает `InitMeterProvider` сам и отдаёт `/metrics` на служебном порту.
 - `http/server`: middleware подключается опцией `httpserver.WithMiddlewares(metrics.Middleware(name))`;
   `/metrics` — на отдельном порту при `HTTP_METRICS_ENABLED=true`.
 - `grpc/server` и `grpc/client` подключают интерсепторы сами (`GRPC_METRICS_ENABLED`, `EnableMetrics`).

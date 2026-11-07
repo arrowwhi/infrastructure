@@ -1,10 +1,8 @@
-package bot
+package telegram
 
 import (
 	"net"
 	"time"
-
-	"github.com/arrowwhi/infrastructure/telegram/api"
 )
 
 // Режимы получения обновлений.
@@ -19,7 +17,7 @@ const (
 type Config struct {
 	Webhook WebhookConfig `yaml:"webhook"`
 	Mode    string        `yaml:"mode" env:"TELEGRAM_MODE" env-default:"polling"`
-	API     api.Config    `yaml:"api"`
+	API     ClientConfig  `yaml:"api"`
 
 	// PollTimeout — сколько getUpdates ждёт новых обновлений (long polling).
 	PollTimeout time.Duration `yaml:"poll_timeout" env:"TELEGRAM_POLL_TIMEOUT" env-default:"30s"`
@@ -69,7 +67,7 @@ func (c WebhookConfig) Addr() string {
 // DefaultConfig возвращает настройки по умолчанию (совпадают с env-default).
 func DefaultConfig(token string) Config {
 	return Config{
-		API:            api.DefaultConfig(token),
+		API:            DefaultClientConfig(token),
 		Mode:           ModePolling,
 		PollTimeout:    30 * time.Second, //nolint:mnd
 		Workers:        8,                //nolint:mnd

@@ -77,9 +77,9 @@ traced.Info().Ctx(ctx).Msg("call") // TraceHook берёт trace_id/span_id из
 
 ## Конфигурация
 
-Префикс переменных задаёт тот, кто встраивает `Config`; в `telegram/app` это `LOG_`.
+Префикс переменных задаёт тот, кто встраивает `Config`; в `telegram` это `LOG_`.
 
-| Переменная (`telegram/app`) | По умолчанию | Смысл |
+| Переменная (`telegram`) | По умолчанию | Смысл |
 |---|---|---|
 | `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` (неизвестное значение → `info`) |
 | `LOG_PRETTYOUTPUT` | `false` | человекочитаемый цветной вывод для локальной разработки |
@@ -105,8 +105,8 @@ traced.Info().Ctx(ctx).Msg("call") // TraceHook берёт trace_id/span_id из
 
 ## Связь с другими пакетами
 
-- `telegram/app` вызывает `logger.Init` сам из `app.Config.Logger`.
-- `http/server`, `grpc/server`, `telegram/bot`, `connections/postgres` пишут через пакетные
+- `telegram` вызывает `logger.Init` сам из `telegram.AppConfig.Logger`.
+- `http/server`, `grpc/server`, `telegram`, `connections/postgres` пишут через пакетные
   функции — их логи получают `trace_id` автоматически.
 - `grpc/client` принимает `*zerolog.Logger` и сам навешивает `TraceHook`; передайте
   `l := logger.With().Logger(); client.NewClient(&cfg, &l)`.

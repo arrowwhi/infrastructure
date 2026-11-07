@@ -119,13 +119,13 @@ func main() {
 ## Связь с другими пакетами
 
 - Трейсы и метрики уходят в глобальные провайдеры: инициализируйте `observability/tracing` и
-  `observability/metrics` (или `telegram/app`) до создания клиента.
+  `observability/metrics` (или `telegram`) до создания клиента.
 - Входящий `ctx` обработчика `http/server` с трейсингом даёт сквозной трейс: спан клиента
   становится дочерним.
 
 ## Подводные камни
 
-- `env-default` работает только при загрузке через cleanenv (`app.LoadConfig`). `Config`, собранный
+- `env-default` работает только при загрузке через cleanenv (`telegram.LoadConfig`). `Config`, собранный
   литералом, получает нули: таймауты выключены, `TracingEnabled`/`MetricsEnabled` = `false`,
   `Retry: nil` — без повторов.
 - Повторяются **любые** методы, включая `POST`, при сетевых ошибках и статусах 429, 500, 502, 503, 504.

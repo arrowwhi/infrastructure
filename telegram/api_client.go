@@ -1,12 +1,4 @@
-// Package api is a hand-written Telegram Bot API client.
-//
-// Клиент намеренно небольшой и без собственного диспетчера: роутинг обновлений
-// живёт в telegram/bot. Зато клиент сам соблюдает лимиты Telegram (глобальный и
-// на чат), повторяет запрос после 429 с паузой из retry_after, не пишет токен
-// бота в ошибки и снимает метрики и трейсы каждого вызова.
-//
-// Методы, для которых нет обёртки, вызываются через Client.Call.
-package api
+package telegram
 
 import (
 	"bytes"
@@ -30,15 +22,15 @@ import (
 )
 
 const (
-	instrumentationName = "github.com/arrowwhi/infrastructure/telegram/api"
-	maxResponseBytes    = 8 << 20
+	clientInstrumentationName = "github.com/arrowwhi/infrastructure/telegram/api"
+	maxResponseBytes          = 8 << 20
 	// pollMargin — запас поверх таймаута long polling: сам запрос висит до
 	// timeout, обрывать его раньше нельзя.
 	pollMargin = 10 * time.Second
 )
 
-// Config — настройки клиента Bot API.
-type Config struct {
+// ClientConfig — настройки клиента Bot API.
+type ClientConfig struct {
 	Token   string `yaml:"token" env:"TELEGRAM_BOT_TOKEN" env-required:"true"`
 	BaseURL string `yaml:"base_url" env:"TELEGRAM_API_URL" env-default:"https://api.telegram.org"`
 
@@ -58,9 +50,9 @@ type Config struct {
 	MaxRetries int `yaml:"max_retries" env:"TELEGRAM_MAX_RETRIES" env-default:"3"`
 }
 
-// DefaultConfig возвращает настройки по умолчанию (совпадают с env-default).
-func DefaultConfig(token string) Config {
-	return Config{
+// DefaultClientConfig возвращает настройки по умолчанию (совпадают с env-default).
+func DefaultClientConfig(token string) ClientConfig {
+	return ClientConfig{
 		Token:          token,
 		BaseURL:        "https://api.telegram.org",
 		RequestTimeout: 15 * time.Second, //nolint:mnd
@@ -72,28 +64,28 @@ func DefaultConfig(token string) Config {
 	}
 }
 
-// Error — отказ Bot API. Различайте ошибки по Code через errors.As, а не по тексту.
-type Error struct {
+// APIError — отказ Bot API. Различайте ошибки по Code через errors.As, а не по тексту.
+type APIError struct {
 	Method      string
 	Description string
 	Code        int
 	RetryAfter  time.Duration
 }
 
-func (e *Error) Error() string {
+func (e *APIError) Error() string {
 	return fmt.Sprintf("telegram %s failed (%d): %s", e.Method, e.Code, e.Description)
 }
 
 // IsCode сообщает, что err — ошибка Bot API с указанным кодом.
 func IsCode(err error, code int) bool {
-	var apiErr *Error
+	var apiErr *APIError
 
 	return errors.As(err, &apiErr) && apiErr.Code == code
 }
 
 // IsMessageNotModified сообщает, что правка не изменила сообщение (ошибкой это обычно не считают).
 func IsMessageNotModified(err error) bool {
-	var apiErr *Error
+	var apiErr *APIError
 
 	return errors.As(err, &apiErr) && strings.Contains(apiErr.Description, "message is not modified")
 }
@@ -104,19 +96,19 @@ type Client struct {
 	limiter *limiter
 	tracer  trace.Tracer
 	metrics *clientMetrics
-	cfg     Config
+	cfg     ClientConfig
 }
 
-// Option настраивает клиент.
-type Option func(*Client)
+// ClientOption настраивает клиент.
+type ClientOption func(*Client)
 
 // WithHTTPClient подменяет HTTP-клиент (прокси, тесты).
-func WithHTTPClient(c *http.Client) Option {
+func WithHTTPClient(c *http.Client) ClientOption {
 	return func(cl *Client) { cl.http = c }
 }
 
-// New создаёт клиента.
-func New(cfg Config, opts ...Option) (*Client, error) {
+// NewClient создаёт клиента.
+func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
 	if cfg.Token == "" {
 		return nil, errors.New("telegram: bot token is required")
 	}
@@ -125,7 +117,7 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 		cfg.BaseURL = "https://api.telegram.org"
 	}
 
-	m, err := newClientMetrics(otel.Meter(instrumentationName))
+	m, err := newClientMetrics(otel.Meter(clientInstrumentationName))
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +126,7 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 		cfg:     cfg,
 		http:    &http.Client{},
 		limiter: newLimiter(cfg),
-		tracer:  otel.Tracer(instrumentationName),
+		tracer:  otel.Tracer(clientInstrumentationName),
 		metrics: m,
 	}
 
@@ -176,7 +168,7 @@ func (c *Client) Call(ctx context.Context, method string, chatID int64, payload,
 
 		err = c.do(ctx, method, body, out)
 
-		var apiErr *Error
+		var apiErr *APIError
 		if !errors.As(err, &apiErr) || apiErr.Code != http.StatusTooManyRequests || attempt >= c.cfg.MaxRetries {
 			return c.finish(span, err)
 		}
@@ -247,7 +239,7 @@ func (c *Client) do(ctx context.Context, method string, body []byte, out any) (e
 	}
 
 	if !parsed.OK {
-		apiErr := &Error{Method: method, Code: parsed.ErrorCode, Description: parsed.Description}
+		apiErr := &APIError{Method: method, Code: parsed.ErrorCode, Description: parsed.Description}
 		if parsed.Parameters != nil && parsed.Parameters.RetryAfter > 0 {
 			apiErr.RetryAfter = time.Duration(parsed.Parameters.RetryAfter) * time.Second
 		}

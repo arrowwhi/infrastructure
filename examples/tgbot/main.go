@@ -1,4 +1,4 @@
-// Пример Telegram-бота на telegram/app + telegram/bot.
+// Пример Telegram-бота на пакете telegram.
 //
 // Запуск локально (long polling, состояние в памяти):
 //
@@ -16,19 +16,16 @@ import (
 
 	"github.com/arrowwhi/infrastructure/connections/postgres"
 	"github.com/arrowwhi/infrastructure/connections/redis"
-	"github.com/arrowwhi/infrastructure/telegram/api"
-	"github.com/arrowwhi/infrastructure/telegram/app"
-	"github.com/arrowwhi/infrastructure/telegram/bot"
-	"github.com/arrowwhi/infrastructure/telegram/state"
+	"github.com/arrowwhi/infrastructure/telegram"
 )
 
-// Config — вся конфигурация бота, читается из env одним вызовом app.LoadConfig.
+// Config — вся конфигурация бота, читается из env одним вызовом telegram.LoadConfig.
 type Config struct {
 	Postgres   postgres.Config
 	Redis      redis.Config
 	StateStore string `env:"STATE_STORE" env-default:"memory"`
-	Telegram   bot.Config
-	App        app.Config
+	Telegram   telegram.Config
+	App        telegram.AppConfig
 }
 
 // movie — данные, которые диалог «оценить фильм» переносит между шагами.
@@ -46,11 +43,11 @@ func run() error {
 	ctx := context.Background()
 
 	var cfg Config
-	if err := app.LoadConfig(&cfg); err != nil {
+	if err := telegram.LoadConfig(&cfg); err != nil {
 		return err
 	}
 
-	a, err := app.New(ctx, cfg.App)
+	a, err := telegram.NewApp(ctx, cfg.App)
 	if err != nil {
 		return err
 	}
@@ -60,9 +57,9 @@ func run() error {
 		return err
 	}
 
-	b, err := bot.New(cfg.Telegram,
-		bot.WithStateStore(store),
-		bot.WithErrorHandler(bot.ReplyOnError("Что-то пошло не так, попробуйте ещё раз.")),
+	b, err := telegram.New(cfg.Telegram,
+		telegram.WithStateStore(store),
+		telegram.WithErrorHandler(telegram.ReplyOnError("Что-то пошло не так, попробуйте ещё раз.")),
 	)
 	if err != nil {
 		return err
@@ -75,15 +72,15 @@ func run() error {
 	return a.Run(ctx, b)
 }
 
-func registerHandlers(b *bot.Bot) {
-	b.Command("start", "Начать", func(c *bot.Context) error {
+func registerHandlers(b *telegram.Bot) {
+	b.Command("start", "Начать", func(c *telegram.Context) error {
 		_, err := c.Reply("Привет! Напиши /rate, чтобы оценить фильм.")
 
 		return err
 	})
 
 	// Шаг 1: спрашиваем название.
-	b.Command("rate", "Оценить фильм", func(c *bot.Context) error {
+	b.Command("rate", "Оценить фильм", func(c *telegram.Context) error {
 		if err := c.SetState("awaiting_title", nil); err != nil {
 			return err
 		}
@@ -94,23 +91,23 @@ func registerHandlers(b *bot.Bot) {
 	})
 
 	// Шаг 2: запоминаем название и показываем кнопки с оценками.
-	b.OnState("awaiting_title", func(c *bot.Context) error {
+	b.OnState("awaiting_title", func(c *telegram.Context) error {
 		if err := c.SetState("awaiting_score", movie{Title: c.Text()}); err != nil {
 			return err
 		}
 
-		row := make([]api.InlineKeyboardButton, 0, 5)
+		row := make([]telegram.InlineKeyboardButton, 0, 5)
 		for score := 6; score <= 10; score++ {
-			row = append(row, api.CallbackButton(strconv.Itoa(score), bot.MustCallbackData("score", strconv.Itoa(score))))
+			row = append(row, telegram.CallbackButton(strconv.Itoa(score), telegram.MustCallbackData("score", strconv.Itoa(score))))
 		}
 
-		_, err := c.Reply("Оценка?", bot.WithKeyboard(api.InlineKeyboard(row)))
+		_, err := c.Reply("Оценка?", telegram.WithKeyboard(telegram.InlineKeyboard(row)))
 
 		return err
 	})
 
 	// Шаг 3: нажатие кнопки — достаём название из состояния и завершаем диалог.
-	b.Callback("score", func(c *bot.Context) error {
+	b.Callback("score", func(c *telegram.Context) error {
 		s, ok, err := c.State()
 		if err != nil {
 			return err
@@ -132,7 +129,7 @@ func registerHandlers(b *bot.Bot) {
 		return c.Edit(fmt.Sprintf("«%s» — %s/10. Сохранено!", m.Title, c.CallbackArgs()[0]), nil, "")
 	})
 
-	b.Text(func(c *bot.Context) error {
+	b.Text(func(c *telegram.Context) error {
 		_, err := c.Reply("Не понимаю. Попробуйте /rate.")
 
 		return err
@@ -140,10 +137,10 @@ func registerHandlers(b *bot.Bot) {
 }
 
 // newStateStore выбирает хранилище состояний по STATE_STORE.
-func newStateStore(ctx context.Context, cfg Config, a *app.App) (state.Store, error) {
+func newStateStore(ctx context.Context, cfg Config, a *telegram.App) (telegram.Store, error) {
 	switch cfg.StateStore {
 	case "memory":
-		return state.NewMemory(), nil
+		return telegram.NewMemoryStore(), nil
 
 	case "redis":
 		rdb, err := redis.New(ctx, cfg.Redis)
@@ -154,7 +151,7 @@ func newStateStore(ctx context.Context, cfg Config, a *app.App) (state.Store, er
 		a.Health().Register("redis", rdb.Healthcheck)
 		a.OnShutdown(func(context.Context) error { return rdb.Close() })
 
-		return state.NewRedis(rdb.Client, ""), nil
+		return telegram.NewRedisStore(rdb.Client, ""), nil
 
 	case "postgres":
 		pool, err := postgres.New(ctx, cfg.Postgres)
@@ -165,12 +162,12 @@ func newStateStore(ctx context.Context, cfg Config, a *app.App) (state.Store, er
 		a.Health().Register("postgres", pool.Healthcheck)
 		a.OnShutdown(func(context.Context) error { pool.Close(); return nil })
 
-		store, err := state.NewPostgres(pool, "")
+		store, err := telegram.NewPostgresStore(pool, "")
 		if err != nil {
 			return nil, err
 		}
 
-		// В реальном сервисе таблицу лучше создавать миграцией: state.PostgresSchema(table).
+		// В реальном сервисе таблицу лучше создавать миграцией: telegram.PostgresStateSchema(table).
 		return store, store.EnsureSchema(ctx)
 
 	default:

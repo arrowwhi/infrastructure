@@ -1,4 +1,4 @@
-package app
+package telegram
 
 import (
 	"errors"
@@ -14,14 +14,14 @@ import (
 	"github.com/arrowwhi/infrastructure/observability/tracing"
 )
 
-// Config — общая часть конфигурации любого сервиса. Встраивается в конфиг сервиса:
+// AppConfig — общая часть конфигурации любого сервиса. Встраивается в конфиг сервиса:
 //
 //	type Config struct {
-//	    App      app.Config      `env-prefix:""`
-//	    Telegram bot.Config
+//	    App      telegram.AppConfig `env-prefix:""`
+//	    Telegram telegram.Config
 //	    Postgres postgres.Config
 //	}
-type Config struct {
+type AppConfig struct {
 	ServiceName string `yaml:"service_name" env:"SERVICE_NAME" env-required:"true"`
 	Version     string `yaml:"version" env:"SERVICE_VERSION" env-default:"dev"`
 	Environment string `yaml:"environment" env:"ENVIRONMENT" env-default:"local"`

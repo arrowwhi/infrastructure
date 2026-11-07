@@ -1,4 +1,4 @@
-package state
+package telegram
 
 import (
 	"context"
@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// Memory — хранилище в памяти процесса. Для тестов и локальной разработки:
+// MemoryStore — хранилище в памяти процесса. Для тестов и локальной разработки:
 // при рестарте всё теряется, между копиями бота не разделяется.
-type Memory struct {
-	items map[Key]memoryItem
+type MemoryStore struct {
+	items map[StateKey]memoryItem
 	now   func() time.Time
 	mu    sync.Mutex
 }
@@ -19,32 +19,32 @@ type memoryItem struct {
 	state     State
 }
 
-// NewMemory создаёт хранилище в памяти.
-func NewMemory() *Memory {
-	return &Memory{items: make(map[Key]memoryItem), now: time.Now}
+// NewMemoryStore создаёт хранилище в памяти.
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{items: make(map[StateKey]memoryItem), now: time.Now}
 }
 
-// Get возвращает состояние или ErrNotFound.
-func (m *Memory) Get(_ context.Context, key Key) (State, error) {
+// Get возвращает состояние или ErrStateNotFound.
+func (m *MemoryStore) Get(_ context.Context, key StateKey) (State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	item, ok := m.items[key]
 	if !ok {
-		return State{}, ErrNotFound
+		return State{}, ErrStateNotFound
 	}
 
 	if !item.expiresAt.IsZero() && !m.now().Before(item.expiresAt) {
 		delete(m.items, key)
 
-		return State{}, ErrNotFound
+		return State{}, ErrStateNotFound
 	}
 
 	return item.state, nil
 }
 
 // Set сохраняет состояние.
-func (m *Memory) Set(_ context.Context, key Key, s State, ttl time.Duration) error {
+func (m *MemoryStore) Set(_ context.Context, key StateKey, s State, ttl time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -60,7 +60,7 @@ func (m *Memory) Set(_ context.Context, key Key, s State, ttl time.Duration) err
 }
 
 // Delete удаляет состояние.
-func (m *Memory) Delete(_ context.Context, key Key) error {
+func (m *MemoryStore) Delete(_ context.Context, key StateKey) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -70,7 +70,7 @@ func (m *Memory) Delete(_ context.Context, key Key) error {
 }
 
 // gcLocked время от времени вычищает истёкшие записи, чтобы карта не росла бесконечно.
-func (m *Memory) gcLocked() {
+func (m *MemoryStore) gcLocked() {
 	const gcThreshold = 1024
 	if len(m.items) < gcThreshold {
 		return

@@ -1,4 +1,4 @@
-package api
+package telegram
 
 import (
 	"context"
@@ -37,11 +37,11 @@ func fakeAPI(t *testing.T, handler func(method string, body map[string]any) (int
 	}))
 	t.Cleanup(srv.Close)
 
-	cfg := DefaultConfig(testToken)
+	cfg := DefaultClientConfig(testToken)
 	cfg.BaseURL = srv.URL
 	cfg.ChatInterval = 0
 
-	c, err := New(cfg)
+	c, err := NewClient(cfg)
 	require.NoError(t, err)
 
 	return c
@@ -97,10 +97,10 @@ func TestRetryAfter429(t *testing.T) {
 }
 
 func TestTokenNotLeakedInErrors(t *testing.T) {
-	cfg := DefaultConfig(testToken)
+	cfg := DefaultClientConfig(testToken)
 	cfg.BaseURL = "http://127.0.0.1:1" // никто не слушает
 
-	c, err := New(cfg)
+	c, err := NewClient(cfg)
 	require.NoError(t, err)
 
 	_, err = c.GetMe(context.Background())
@@ -113,7 +113,7 @@ func TestPerChatLimiter(t *testing.T) {
 		return http.StatusOK, `{"ok":true,"result":{"message_id":1,"chat":{"id":1,"type":"private"},"date":1}}`
 	})
 
-	c.limiter = newLimiter(Config{GlobalRate: 1000, ChatInterval: 100 * time.Millisecond, ChatBurst: 1})
+	c.limiter = newLimiter(ClientConfig{GlobalRate: 1000, ChatInterval: 100 * time.Millisecond, ChatBurst: 1})
 
 	start := time.Now()
 

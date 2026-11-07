@@ -22,15 +22,11 @@ health-проверок.
 | `observability/metrics` | OTel-метрики (Prometheus/OTLP), HTTP-middleware, gRPC-интерсепторы, `app_build_info` | [README](observability/metrics/README.md) |
 | `observability/tracing` | OTel-трейсинг (OTLP gRPC/HTTP, stdout), `ParentBased`-сэмплинг, HTTP-middleware | [README](observability/tracing/README.md) |
 | `observability/health` | Реестр проверок для `/ready`, gRPC health и метрик `health.check.*` | [README](observability/health/README.md) |
-| `telegram/app` | Запуск сервиса: конфиг, логи, метрики, трейсы, служебный порт, порядок остановки | [README](telegram/app/README.md) |
-| `telegram/bot` | Telegram-бот: маршруты, шаги диалога, воркеры, polling/webhook | [README](telegram/bot/README.md) |
-| `telegram/api` | Клиент Bot API с лимитами Telegram и повтором после 429 | [README](telegram/api/README.md) |
-| `telegram/state` | Хранилище шагов диалога: память, PostgreSQL, Redis | [README](telegram/state/README.md) |
+| `telegram` | Telegram-бот целиком: запуск сервиса (конфиг, логи, метрики, трейсы, служебный порт, порядок остановки), маршруты и шаги диалога, клиент Bot API с лимитами и повтором после 429, хранилище шагов (память, PostgreSQL, Redis). Старые `telegram/app`, `telegram/bot`, `telegram/api`, `telegram/state` оставлены как алиасы | [README](telegram/README.md) |
 | `utils/masking` | Маскирование персональных данных в JSON, XML и `map[string]any` | [README](utils/masking/README.md) |
 | `utils/txmanager` | Общая транзакция PostgreSQL + конвейер Redis | [README](utils/txmanager/README.md) |
 
-Обзоры: [`telegram`](telegram/README.md) — как связаны четыре telegram-пакета;
-[`observability`](observability/README.md) — локальный стенд OTel Collector + Jaeger + Prometheus + Grafana.
+Обзор: [`observability`](observability/README.md) — локальный стенд OTel Collector + Jaeger + Prometheus + Grafana.
 
 ## Быстрый старт
 
@@ -38,7 +34,7 @@ health-проверок.
 go get github.com/arrowwhi/infrastructure@latest
 ```
 
-Типичный `main`: конфиг из env, инфраструктура из `telegram/app`, коннекторы с health-проверками
+Типичный `main`: конфиг из env, инфраструктура из `telegram`, коннекторы с health-проверками
 и закрытием при остановке, компоненты (бот, HTTP-/gRPC-сервер) под общим `Run`.
 
 ```go
@@ -51,17 +47,15 @@ import (
 	"github.com/arrowwhi/infrastructure/connections/postgres"
 	"github.com/arrowwhi/infrastructure/connections/redis"
 	"github.com/arrowwhi/infrastructure/observability/health"
-	"github.com/arrowwhi/infrastructure/telegram/app"
-	"github.com/arrowwhi/infrastructure/telegram/bot"
-	"github.com/arrowwhi/infrastructure/telegram/state"
+	"github.com/arrowwhi/infrastructure/telegram"
 )
 
 // Config — вся конфигурация сервиса, читается из env (и .env) одним вызовом.
 type Config struct {
-	App      app.Config
+	App      telegram.AppConfig
 	Postgres postgres.Config
 	Redis    redis.Config
-	Telegram bot.Config
+	Telegram telegram.Config
 }
 
 func main() {
@@ -74,12 +68,12 @@ func run() error {
 	ctx := context.Background()
 
 	var cfg Config
-	if err := app.LoadConfig(&cfg); err != nil {
+	if err := telegram.LoadConfig(&cfg); err != nil {
 		return err
 	}
 
 	// Логгер, трейсинг, метрики, health-реестр и служебный порт :9090 (/healthz, /ready, /metrics).
-	a, err := app.New(ctx, cfg.App)
+	a, err := telegram.NewApp(ctx, cfg.App)
 	if err != nil {
 		return err
 	}
@@ -98,13 +92,13 @@ func run() error {
 	a.Health().Register("redis", rdb.Healthcheck, health.NonCritical())
 	a.OnShutdown(func(context.Context) error { return rdb.Close() })
 
-	b, err := bot.New(cfg.Telegram, bot.WithStateStore(state.NewRedis(rdb.Client, "")))
+	b, err := telegram.New(cfg.Telegram, telegram.WithStateStore(telegram.NewRedisStore(rdb.Client, "")))
 	if err != nil {
 		return err
 	}
 	a.Health().Register("telegram", b.Healthcheck)
 
-	b.Command("start", "Начать", func(c *bot.Context) error {
+	b.Command("start", "Начать", func(c *telegram.Context) error {
 		_, err := c.Reply("Привет!")
 		return err
 	})
@@ -126,24 +120,24 @@ HTTP- и gRPC-серверы подключаются так же — это к�
 
 ## Как пакеты работают вместе
 
-- **Конфиг.** У каждого пакета `Config` с тегами `env`/`env-default`; `app.LoadConfig` читает их
+- **Конфиг.** У каждого пакета `Config` с тегами `env`/`env-default`; `telegram.LoadConfig` читает их
   все одной структурой. Таблицы переменных — в README пакетов.
-- **Телеметрия.** `telegram/app` (или `tracing.InitTracer` + `metrics.InitMeterProvider`) регистрирует
+- **Телеметрия.** `telegram` (или `tracing.InitTracer` + `metrics.InitMeterProvider`) регистрирует
   провайдеры глобально; коннекторы, серверы и клиенты пишут в них без дополнительной настройки.
   Трейсинг по умолчанию выключен (`OTEL_ENABLED=false`), длительности во всех метриках библиотеки —
   в секундах (кроме метрик пула redisotel).
 - **Логи.** `observability/logger` добавляет `trace_id`/`span_id` в каждую запись с контекстом спана
   и маскирует персональные данные.
-- **Health.** Один `health.Registry` отдаёт `/ready` (`telegram/app` или `http/server`), переключает
+- **Health.** Один `health.Registry` отдаёт `/ready` (`telegram` или `http/server`), переключает
   `grpc.health.v1` (`grpc/server`) и публикует `health.check.*`. Готовые проверки: `postgres.Pool.Healthcheck`,
-  `redis.Client.Healthcheck`, `bot.Bot.Healthcheck`.
-- **Остановка.** `app.OnShutdown` закрывает ресурсы в обратном порядке после остановки компонентов.
+  `redis.Client.Healthcheck`, `telegram.Bot.Healthcheck`.
+- **Остановка.** `telegram.App.OnShutdown` закрывает ресурсы в обратном порядке после остановки компонентов.
 
 ## Примеры
 
 | Каталог | Что показывает |
 |---|---|
-| [`examples/tgbot`](examples/tgbot/main.go) | бот на `telegram/app` + `telegram/bot` с диалогом и выбором хранилища состояний |
+| [`examples/tgbot`](examples/tgbot/main.go) | бот на пакете `telegram` с диалогом и выбором хранилища состояний |
 | [`examples/http`](examples/http/main.go) | HTTP-сервер с трейсингом, метриками и PostgreSQL |
 | [`examples/docker-compose.yml`](examples/docker-compose.yml) | стенд OTel Collector, Jaeger, Prometheus, Grafana — см. [`observability`](observability/README.md) |
 

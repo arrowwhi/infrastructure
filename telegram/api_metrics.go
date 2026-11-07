@@ -1,4 +1,4 @@
-package api
+package telegram
 
 import (
 	"context"
@@ -60,7 +60,7 @@ func (m *clientMetrics) recordCall(ctx context.Context, method string, start tim
 	if err != nil {
 		status = "error"
 
-		var apiErr *Error
+		var apiErr *APIError
 		if errors.As(err, &apiErr) {
 			status = strconv.Itoa(apiErr.Code)
 		}

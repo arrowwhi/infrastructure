@@ -1,4 +1,4 @@
-package bot
+package telegram
 
 import (
 	"context"
@@ -12,14 +12,12 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/arrowwhi/infrastructure/observability/logger"
-	"github.com/arrowwhi/infrastructure/telegram/api"
 )
 
 const (
-	secretHeader      = "X-Telegram-Bot-Api-Secret-Token" //nolint:gosec // имя заголовка, не секрет
-	maxWebhookBody    = 1 << 20
-	readHeaderTimeout = 10 * time.Second
-	shutdownTimeout   = 10 * time.Second
+	secretHeader    = "X-Telegram-Bot-Api-Secret-Token" //nolint:gosec // имя заголовка, не секрет
+	maxWebhookBody  = 1 << 20
+	shutdownTimeout = 10 * time.Second
 )
 
 // WebhookHandler принимает обновления по HTTP. Его можно повесить на роутер сервиса
@@ -42,7 +40,7 @@ func (b *Bot) WebhookHandler() http.Handler {
 			return
 		}
 
-		var u api.Update
+		var u Update
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWebhookBody)).Decode(&u); err != nil {
 			logger.Warn(r.Context()).Err(err).Msg("Failed to decode Telegram update")
 			w.WriteHeader(http.StatusBadRequest)
@@ -98,7 +96,7 @@ func (b *Bot) runWebhook(ctx context.Context) error {
 		close(errCh)
 	}()
 
-	if err := b.api.SetWebhook(ctx, api.SetWebhookRequest{
+	if err := b.api.SetWebhook(ctx, SetWebhookRequest{
 		URL:                cfg.URL,
 		SecretToken:        cfg.Secret,
 		AllowedUpdates:     allowedUpdates,
@@ -133,7 +131,7 @@ func (b *Bot) runWebhook(ctx context.Context) error {
 func (b *Bot) registerWebhookAndWait(ctx context.Context) error {
 	cfg := b.cfg.Webhook
 
-	if err := b.api.SetWebhook(ctx, api.SetWebhookRequest{
+	if err := b.api.SetWebhook(ctx, SetWebhookRequest{
 		URL:                cfg.URL,
 		SecretToken:        cfg.Secret,
 		AllowedUpdates:     allowedUpdates,

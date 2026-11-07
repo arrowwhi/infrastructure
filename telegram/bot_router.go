@@ -1,11 +1,9 @@
-package bot
+package telegram
 
 import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/arrowwhi/infrastructure/telegram/api"
 )
 
 const (
@@ -172,7 +170,7 @@ func (b *Bot) unhandled(c *Context) HandlerFunc {
 const routeUnhandled = "unhandled"
 
 // parseCommand разбирает "/cmd@bot args". Команды, адресованные другому боту, пропускаются.
-func (b *Bot) parseCommand(m *api.Message) (name, args string, ok bool) {
+func (b *Bot) parseCommand(m *Message) (name, args string, ok bool) {
 	text := m.Text
 	if !strings.HasPrefix(text, "/") {
 		return "", "", false
@@ -197,12 +195,12 @@ func (b *Bot) parseCommand(m *api.Message) (name, args string, ok bool) {
 }
 
 // menuCommands возвращает команды с описанием для setMyCommands.
-func (r *router) menuCommands() []api.BotCommand {
-	var out []api.BotCommand
+func (r *router) menuCommands() []BotCommand {
+	var out []BotCommand
 
 	for name, cmd := range r.commands {
 		if cmd.description != "" {
-			out = append(out, api.BotCommand{Command: name, Description: cmd.description})
+			out = append(out, BotCommand{Command: name, Description: cmd.description})
 		}
 	}
 

@@ -1,4 +1,4 @@
-package state
+package telegram
 
 import (
 	"context"
@@ -17,9 +17,9 @@ const DefaultPostgresTable = "telegram_states"
 
 var tableNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$`)
 
-// PostgresSchema возвращает DDL таблицы — его удобно положить в миграцию сервиса.
-// Состояние истекает по expires_at; удаляет истёкшие записи Postgres.Cleanup.
-func PostgresSchema(table string) string {
+// PostgresStateSchema возвращает DDL таблицы — его удобно положить в миграцию сервиса.
+// Состояние истекает по expires_at; удаляет истёкшие записи PostgresStore.Cleanup.
+func PostgresStateSchema(table string) string {
 	return fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %[1]s (
     chat_id    bigint      NOT NULL,
     user_id    bigint      NOT NULL,
@@ -32,15 +32,15 @@ func PostgresSchema(table string) string {
 CREATE INDEX IF NOT EXISTS %[2]s_expires_at_idx ON %[1]s (expires_at) WHERE expires_at IS NOT NULL;`, table, indexPrefix(table))
 }
 
-// Postgres — хранилище в таблице PostgreSQL.
-type Postgres struct {
+// PostgresStore — хранилище в таблице PostgreSQL.
+type PostgresStore struct {
 	pool  *postgres.Pool
 	table string
 }
 
-// NewPostgres создаёт хранилище. table пустое — DefaultPostgresTable. Таблицу создаёт
-// миграция сервиса (PostgresSchema) или EnsureSchema.
-func NewPostgres(pool *postgres.Pool, table string) (*Postgres, error) {
+// NewPostgresStore создаёт хранилище. table пустое — DefaultPostgresTable. Таблицу создаёт
+// миграция сервиса (PostgresStateSchema) или EnsureSchema.
+func NewPostgresStore(pool *postgres.Pool, table string) (*PostgresStore, error) {
 	if table == "" {
 		table = DefaultPostgresTable
 	}
@@ -49,20 +49,20 @@ func NewPostgres(pool *postgres.Pool, table string) (*Postgres, error) {
 		return nil, fmt.Errorf("state: invalid table name %q", table)
 	}
 
-	return &Postgres{pool: pool, table: table}, nil
+	return &PostgresStore{pool: pool, table: table}, nil
 }
 
 // EnsureSchema создаёт таблицу, если её нет. Удобно для небольших ботов без миграций.
-func (p *Postgres) EnsureSchema(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, PostgresSchema(p.table)); err != nil {
+func (p *PostgresStore) EnsureSchema(ctx context.Context) error {
+	if _, err := p.pool.Exec(ctx, PostgresStateSchema(p.table)); err != nil {
 		return fmt.Errorf("state: create table: %w", err)
 	}
 
 	return nil
 }
 
-// Get возвращает состояние или ErrNotFound (в том числе для истёкшего).
-func (p *Postgres) Get(ctx context.Context, key Key) (State, error) {
+// Get возвращает состояние или ErrStateNotFound (в том числе для истёкшего).
+func (p *PostgresStore) Get(ctx context.Context, key StateKey) (State, error) {
 	var s State
 
 	err := p.pool.QueryRow(ctx,
@@ -72,7 +72,7 @@ func (p *Postgres) Get(ctx context.Context, key Key) (State, error) {
 	).Scan(&s.Name, &s.Data)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return State{}, ErrNotFound
+		return State{}, ErrStateNotFound
 	}
 
 	if err != nil {
@@ -83,7 +83,7 @@ func (p *Postgres) Get(ctx context.Context, key Key) (State, error) {
 }
 
 // Set сохраняет состояние (upsert).
-func (p *Postgres) Set(ctx context.Context, key Key, s State, ttl time.Duration) error {
+func (p *PostgresStore) Set(ctx context.Context, key StateKey, s State, ttl time.Duration) error {
 	var expiresAt *time.Time
 
 	if ttl > 0 {
@@ -111,7 +111,7 @@ func (p *Postgres) Set(ctx context.Context, key Key, s State, ttl time.Duration)
 }
 
 // Delete удаляет состояние.
-func (p *Postgres) Delete(ctx context.Context, key Key) error {
+func (p *PostgresStore) Delete(ctx context.Context, key StateKey) error {
 	if _, err := p.pool.Exec(ctx,
 		`DELETE FROM `+p.table+` WHERE chat_id = $1 AND user_id = $2`, key.ChatID, key.UserID); err != nil {
 		return fmt.Errorf("state: delete: %w", err)
@@ -122,7 +122,7 @@ func (p *Postgres) Delete(ctx context.Context, key Key) error {
 
 // Cleanup удаляет истёкшие записи и возвращает их число. Запускайте периодически
 // (например, раз в час): Get и так их не возвращает, это только уборка места.
-func (p *Postgres) Cleanup(ctx context.Context) (int64, error) {
+func (p *PostgresStore) Cleanup(ctx context.Context) (int64, error) {
 	tag, err := p.pool.Exec(ctx, `DELETE FROM `+p.table+` WHERE expires_at IS NOT NULL AND expires_at <= now()`)
 	if err != nil {
 		return 0, fmt.Errorf("state: cleanup: %w", err)

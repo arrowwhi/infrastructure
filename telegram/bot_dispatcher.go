@@ -1,11 +1,9 @@
-package bot
+package telegram
 
 import (
 	"context"
 	"errors"
 	"sync"
-
-	"github.com/arrowwhi/infrastructure/telegram/api"
 )
 
 // errStopped возвращается enqueue после остановки диспетчера.
@@ -15,19 +13,19 @@ var errStopped = errors.New("bot: dispatcher stopped")
 // воркеру (chat_id mod N), поэтому сообщения одного чата обрабатываются строго
 // по порядку, а разные чаты — параллельно.
 type dispatcher struct {
-	process func(api.Update)
-	queues  []chan api.Update
+	process func(Update)
+	queues  []chan Update
 	wg      sync.WaitGroup
 	mu      sync.RWMutex
 	started bool
 	stopped bool
 }
 
-func newDispatcher(workers, queueSize int, process func(api.Update)) *dispatcher {
-	d := &dispatcher{process: process, queues: make([]chan api.Update, workers)}
+func newDispatcher(workers, queueSize int, process func(Update)) *dispatcher {
+	d := &dispatcher{process: process, queues: make([]chan Update, workers)}
 
 	for i := range d.queues {
-		d.queues[i] = make(chan api.Update, queueSize)
+		d.queues[i] = make(chan Update, queueSize)
 	}
 
 	return d
@@ -46,7 +44,7 @@ func (d *dispatcher) start() {
 	for _, q := range d.queues {
 		d.wg.Add(1)
 
-		go func(q chan api.Update) {
+		go func(q chan Update) {
 			defer d.wg.Done()
 
 			for u := range q {
@@ -57,7 +55,7 @@ func (d *dispatcher) start() {
 }
 
 // enqueue кладёт обновление в очередь его чата; блокируется, пока очередь полна.
-func (d *dispatcher) enqueue(ctx context.Context, u api.Update) error {
+func (d *dispatcher) enqueue(ctx context.Context, u Update) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -105,7 +103,7 @@ func (d *dispatcher) size() int {
 	return n
 }
 
-func (d *dispatcher) index(u api.Update) int {
+func (d *dispatcher) index(u Update) int {
 	var key int64
 	if chat := u.Chat(); chat != nil {
 		key = chat.ID

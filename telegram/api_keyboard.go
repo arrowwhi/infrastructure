@@ -1,10 +1,10 @@
-package api
+package telegram
 
 // InlineKeyboard собирает inline-клавиатуру из рядов кнопок.
 //
-//	api.InlineKeyboard(
-//	    api.Row(api.CallbackButton("Да", "ok:42"), api.CallbackButton("Нет", "no:42")),
-//	    api.Row(api.URLButton("Открыть", "https://example.com")),
+//	telegram.InlineKeyboard(
+//	    telegram.Row(telegram.CallbackButton("Да", "ok:42"), telegram.CallbackButton("Нет", "no:42")),
+//	    telegram.Row(telegram.URLButton("Открыть", "https://example.com")),
 //	)
 func InlineKeyboard(rows ...[]InlineKeyboardButton) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}

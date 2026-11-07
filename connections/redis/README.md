@@ -90,7 +90,7 @@ func main() {
 - Health: `a.Health().Register("redis", rdb.Healthcheck)` — `PING` через пул, поэтому исчерпанный
   пул тоже валит проверку (по `REDIS_POOL_TIMEOUT`). Для кэша обычно `health.NonCritical()`.
 - Остановка: `a.OnShutdown(func(context.Context) error { return rdb.Close() })`.
-- `telegram/state.NewRedis(rdb.Client, "")` и `utils/txmanager.New(pool, rdb.Client)` принимают
+- `telegram.NewRedisStore(rdb.Client, "")` и `utils/txmanager.New(pool, rdb.Client)` принимают
   встроенный `*goredis.Client` — передавайте `rdb.Client`.
 
 ## Подводные камни

@@ -74,7 +74,7 @@ func main() {
 
 ## Конфигурация
 
-`Config` обычно приезжает из общего конфига сервиса (`app.LoadConfig`). Без `env-prefix` имена такие:
+`Config` обычно приезжает из общего конфига сервиса (`telegram.LoadConfig`). Без `env-prefix` имена такие:
 
 | Переменная | По умолчанию | Смысл |
 |---|---|---|
@@ -129,8 +129,8 @@ func main() {
   и исчерпание пула.
 - Остановка: `a.OnShutdown(func(context.Context) error { pool.Close(); return nil })`.
 - Трейсы и метрики — в глобальные провайдеры `observability/tracing`/`observability/metrics`
-  (или `telegram/app`); свои — `WithTracerProvider`/`WithMeterProvider`.
-- `telegram/state.NewPostgres(pool, "")` — хранилище шагов диалога бота.
+  (или `telegram`); свои — `WithTracerProvider`/`WithMeterProvider`.
+- `telegram.NewPostgresStore(pool, "")` — хранилище шагов диалога бота.
 - `utils/txmanager` — только для транзакции, общей с Redis; для PostgreSQL достаточно `pool.InTx`.
 
 ## Подводные камни

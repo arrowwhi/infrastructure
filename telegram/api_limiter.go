@@ -1,4 +1,4 @@
-package api
+package telegram
 
 import (
 	"context"
@@ -16,7 +16,7 @@ const chatLimiterTTL = 10 * time.Minute
 type limiter struct {
 	global   *rate.Limiter
 	chats    map[int64]*chatLimiter
-	cfg      Config
+	cfg      ClientConfig
 	lastGC   time.Time
 	mu       sync.Mutex
 	disabled bool
@@ -27,7 +27,7 @@ type chatLimiter struct {
 	lastUsed time.Time
 }
 
-func newLimiter(cfg Config) *limiter {
+func newLimiter(cfg ClientConfig) *limiter {
 	l := &limiter{cfg: cfg, chats: make(map[int64]*chatLimiter), lastGC: time.Now()}
 
 	if cfg.GlobalRate <= 0 {

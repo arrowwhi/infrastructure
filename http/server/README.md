@@ -69,7 +69,7 @@ func main() {
 ```
 
 Трейсинг и метрики предварительно инициализируются (`tracing.InitTracer`, `metrics.InitMeterProvider`)
-или через `telegram/app`.
+или через `telegram`.
 
 ## Конфигурация
 
@@ -112,7 +112,7 @@ func main() {
 - Health: общий реестр — `httpserver.WithHealthRegistry(reg)`; проверки — `srv.AddHealthCheckFunc(name, fn, opts...)`
   или `srv.Health().Register(...)`. Тот же реестр можно отдать в `grpc/server.WithHealthRegistry`.
   `AddHealthCheck(HealthChecker)` устарел.
-- `telegram/app`: `*Server` реализует `app.Component` (`Run(ctx) error`) — передайте его в `a.Run(ctx, srv)`.
+- `telegram`: `*Server` реализует `telegram.Component` (`Run(ctx) error`) — передайте его в `a.Run(ctx, srv)`.
   Тогда реестр лучше брать из приложения: `httpserver.WithHealthRegistry(a.Health())`, а `/metrics`
   уже есть на служебном порту приложения — `HTTP_METRICS_ENABLED` не включайте.
 - `WithShutdownHook(fn)` — функции, вызываемые после остановки сервера (в порядке регистрации).
@@ -127,6 +127,6 @@ func main() {
   (спан создаётся позже) и тела запросов/ответов логируются целиком до 512 КБ — не возвращайте
   в ответах секреты и учитывайте объём логов.
 - Если обработчик не вызвал `WriteHeader`, access-лог пишет `status_code: 0`.
-- `Run` сам ловит SIGINT/SIGTERM. Под `telegram/app` это безопасно, но остановка может начаться
+- `Run` сам ловит SIGINT/SIGTERM. Под `telegram` это безопасно, но остановка может начаться
   с сервера раньше, чем приложение отменит контекст.
 - HTTP/3 не поддерживает `ReadTimeout`/`WriteTimeout` и останавливается без ожидания активных запросов.
