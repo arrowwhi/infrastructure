@@ -38,7 +38,7 @@ func New(config Config, opts ...Option) (*Server, error) {
 	r.Use(middleware.Recoverer)
 	r.Use(middlewares.RequestID)
 	r.Use(middlewares.RealIP)
-	r.Use(middlewares.Log)
+	r.Use(middlewares.NewLog(middlewares.LogOptions{DisableBodies: config.DisableBodyLogging}))
 
 	s := &Server{
 		config:   config,

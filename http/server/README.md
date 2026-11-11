@@ -81,6 +81,7 @@ func main() {
 | `HTTP_PPROF_ENABLED` | `false` | `/debug/pprof/*` на служебном порту |
 | `HTTP_HTTP3_ENABLED` | `false` | HTTP/3 (QUIC) вместо HTTP/1.1+2; требует TLS |
 | `HTTP_SWAGGER_ENABLED` | `false` | Swagger UI |
+| `HTTP_DISABLE_BODY_LOGGING` (`DisableBodyLogging`, yaml `disable_body_logging`) | `false` | не писать в access-лог тела запросов/ответов (`request_body`, `response_body`); тела при этом не читаются и не буферизуются |
 | `DOCS_PATH`, `DOCS_SWAGGER_URL`, `DOCS_SPEC_FILE` | `/docs`, `/openapi.yaml`, `openapi.yaml` | где UI, по какому URL и из какого файла отдаётся спецификация |
 | `HTTP_TLS_ENABLED`, `HTTP_MTLS_ENABLED` | `false`, `false` | TLS и проверка клиентских сертификатов |
 | `HTTP_TLS_CERT_FILE`, `HTTP_TLS_KEY_FILE`, `HTTP_TLS_CA_FILE` | — | сертификаты файлами |
@@ -101,7 +102,8 @@ func main() {
 → `middlewares.Log`, затем ваши из `WithMiddleware(s)`. Access-лог — одна запись
 `incoming HTTP request` на запрос (уровень по статусу: info / warn для 4xx / error для 5xx) с
 методом, путём, статусом, `latency`, `request_id` и телами запроса/ответа (до 512 КБ).
-Подробнее — [`middlewares`](middlewares/README.md).
+Тела выключаются `DisableBodyLogging: true` / `HTTP_DISABLE_BODY_LOGGING=true` — для сервисов, у
+которых в запросах и ответах есть персональные данные. Подробнее — [`middlewares`](middlewares/README.md).
 
 Метрики (`http.server.*`) и трейсы появляются только при подключении `metrics.Middleware` и
 `tracing.Middleware` — см. [`observability/metrics`](../../observability/metrics/README.md) и
@@ -124,8 +126,8 @@ func main() {
 - `Router()` возвращает `Group`: `Use` на нём действует только на маршруты, зарегистрированные
   через этот же объект. Глобальные middleware — только через `WithMiddleware(s)`.
 - `middlewares.Log` стоит раньше пользовательских middleware, поэтому в access-логе нет `trace_id`
-  (спан создаётся позже) и тела запросов/ответов логируются целиком до 512 КБ — не возвращайте
-  в ответах секреты и учитывайте объём логов.
+  (спан создаётся позже) и тела запросов/ответов по умолчанию логируются целиком до 512 КБ — если
+  в них есть секреты или персональные данные, включите `DisableBodyLogging`.
 - Если обработчик не вызвал `WriteHeader`, access-лог пишет `status_code: 0`.
 - `Run` сам ловит SIGINT/SIGTERM. Под `telegram` это безопасно, но остановка может начаться
   с сервера раньше, чем приложение отменит контекст.

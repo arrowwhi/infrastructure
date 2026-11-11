@@ -46,6 +46,10 @@ type Config struct {
 
 	MetricsEnabled bool `yaml:"metrics_enabled" env:"HTTP_METRICS_ENABLED" env-default:"false"`
 
+	// DisableBodyLogging выключает запись тел запросов/ответов (request_body, response_body)
+	// в access-лог. По умолчанию тела логируются.
+	DisableBodyLogging bool `yaml:"disable_body_logging" env:"HTTP_DISABLE_BODY_LOGGING" env-default:"false"`
+
 	// Pprof profiling endpoints
 	PprofEnabled bool `yaml:"pprof_enabled" env:"HTTP_PPROF_ENABLED" env-default:"false"`
 }

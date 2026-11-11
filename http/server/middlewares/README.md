@@ -56,7 +56,7 @@ func main() {
 |---|---|
 | `RequestID` | берёт `X-Request-ID` из запроса или генерирует UUID v4; кладёт в контекст под `RequestIDKey` |
 | `RealIP` | выставляет `r.RemoteAddr` из `True-Client-IP` → `X-Real-IP` → первого адреса `X-Forwarded-For` (если это валидный IP) |
-| `Log` | одна запись `incoming HTTP request` после ответа: info (<400), warn (4xx), error (5xx; с ошибкой из `SetError`, если она есть) |
+| `Log` / `NewLog(LogOptions)` | одна запись `incoming HTTP request` после ответа: info (<400), warn (4xx), error (5xx; с ошибкой из `SetError`, если она есть) |
 
 Поля access-лога: `remote_addr`, `path`, `protocol`, `method`, `user_agent`, `status`, `status_code`,
 `latency`, `bytes_in`, `request_id`, `request_body`, `response_body` (JSON-тела встраиваются как
@@ -65,11 +65,22 @@ func main() {
 
 ## Конфигурация
 
-Нет — middleware без настроек.
+`Log` — access-лог с настройками по умолчанию (тела логируются). Для настройки — `NewLog`:
+
+```go
+r.Use(middlewares.NewLog(middlewares.LogOptions{DisableBodies: true}))
+```
+
+| Поле `LogOptions` | По умолчанию | Смысл |
+|---|---|---|
+| `DisableBodies` | `false` | не писать `request_body` / `response_body`; тело запроса не читается заранее, тело ответа не копится в буфер |
+
+В `http/server` это поле выставляется из `Config.DisableBodyLogging` (`HTTP_DISABLE_BODY_LOGGING`).
 
 ## Связь с другими пакетами
 
-- `http/server.New` подключает `Recoverer`, `RequestID`, `RealIP`, `Log` в этом порядке.
+- `http/server.New` подключает `Recoverer`, `RequestID`, `RealIP`, `NewLog(LogOptions{DisableBodies: cfg.DisableBodyLogging})`
+  в этом порядке.
 - Логи пишутся через `observability/logger` (уровень, маскирование, формат — из его конфигурации).
 
 ## Подводные камни
@@ -77,8 +88,8 @@ func main() {
 - `RealIP` доверяет заголовкам безусловно. Без доверенного прокси перед сервисом клиент может
   подставить любой IP.
 - `RequestID` не возвращает `X-Request-ID` в ответе и не проверяет формат входящего значения.
-- `Log` читает тело запроса в память (до 512 КБ + 1 байт) и буферизует тело ответа: не подходит
-  для больших загрузок и стриминга; `ResponseWriter` не реализует `http.Flusher`, поэтому SSE
+- `Log` читает тело запроса в память (до 512 КБ + 1 байт) и буферизует тело ответа (кроме режима
+  `DisableBodies`): не подходит для больших загрузок и стриминга; `ResponseWriter` не реализует `http.Flusher`, поэтому SSE
   через него не работает.
 - `trace_id` попадает в access-лог только если спан создан **до** `Log` (в `http/server` это не так).
 - Если обработчик пишет тело без `WriteHeader`, в лог попадает `status_code: 0`.
