@@ -31,17 +31,43 @@ func SetError(r *http.Request, err error) {
 	*r = *r.WithContext(context.WithValue(r.Context(), ErrorKey, err))
 }
 
-//nolint:gocognit
+// LogOptions настраивает access-лог, создаваемый NewLog.
+type LogOptions struct {
+	// DisableBodies выключает логирование тел запроса и ответа (поля request_body и
+	// response_body). Тело запроса при этом не читается и не буферизуется, тело ответа
+	// не копится: middleware передаёт их как есть. Остальные поля записи сохраняются.
+	DisableBodies bool
+}
+
+// Log — access-лог с настройками по умолчанию: тела запроса и ответа логируются (до 512 КБ).
+// Эквивалентно NewLog(LogOptions{})(next).
 func Log(next http.Handler) http.Handler {
+	return NewLog(LogOptions{})(next)
+}
+
+// NewLog возвращает access-лог middleware с заданными настройками.
+// Например, NewLog(LogOptions{DisableBodies: true}) не пишет в лог тела запросов и ответов.
+func NewLog(opts LogOptions) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return logHandler(next, opts)
+	}
+}
+
+//nolint:gocognit
+func logHandler(next http.Handler, opts LogOptions) http.Handler {
+	logBodies := !opts.DisableBodies
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lrw := &loggingResponseWriter{
 			ResponseWriter: w,
-			body:           &bytes.Buffer{},
+		}
+		if logBodies {
+			lrw.body = &bytes.Buffer{}
 		}
 		start := time.Now()
 
 		var requestBody []byte
-		if r.Body != nil { //nolint:nestif
+		if logBodies && r.Body != nil { //nolint:nestif
 			bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize+1))
 			if err == nil {
 				r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
@@ -98,7 +124,7 @@ func Log(next http.Handler) http.Handler {
 				logEvent = addBodyToLog(logEvent, "request_body", requestBody)
 			}
 
-			if lrw.body.Len() > 0 {
+			if lrw.body != nil && lrw.body.Len() > 0 {
 				responseBody := lrw.body.Bytes()
 				if len(responseBody) > maxBodySize {
 					responseBody = responseBody[:maxBodySize]
@@ -117,7 +143,7 @@ type loggingResponseWriter struct {
 	http.ResponseWriter
 	status     string
 	statusCode int
-	body       *bytes.Buffer
+	body       *bytes.Buffer // nil, если тела не логируются
 }
 
 func (lrw *loggingResponseWriter) WriteHeader(code int) {
@@ -127,7 +153,7 @@ func (lrw *loggingResponseWriter) WriteHeader(code int) {
 }
 
 func (lrw *loggingResponseWriter) Write(b []byte) (int, error) {
-	if lrw.body.Len() < maxBodySize {
+	if lrw.body != nil && lrw.body.Len() < maxBodySize {
 		remaining := maxBodySize - lrw.body.Len()
 		if len(b) > remaining {
 			lrw.body.Write(b[:remaining])
